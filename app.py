@@ -13,11 +13,62 @@ st.set_page_config(
 
 st.title("📦 Raincoat Order Sorting Engine")
 
+# --- SESSION STATE INITIALIZATION ---
+if "processed" not in st.session_state:
+    st.session_state.processed = False
+if "main_pdf_data" not in st.session_state:
+    st.session_state.main_pdf_data = None
+if "duplicate_pdf_data" not in st.session_state:
+    st.session_state.duplicate_pdf_data = None
+if "cropped_pdf_data" not in st.session_state:
+    st.session_state.cropped_pdf_data = None
+if "all_pages" not in st.session_state:
+    st.session_state.all_pages = []
+if "main_pages" not in st.session_state:
+    st.session_state.main_pages = []
+if "duplicate_pages" not in st.session_state:
+    st.session_state.duplicate_pages = []
+if "exchange_orders" not in st.session_state:
+    st.session_state.exchange_orders = []
+if "bulk_orders" not in st.session_state:
+    st.session_state.bulk_orders = []
+if "duplicate_groups" not in st.session_state:
+    st.session_state.duplicate_groups = []
+if "last_uploaded_fingerprint" not in st.session_state:
+    st.session_state.last_uploaded_fingerprint = None
+
+
+# Reset utility to completely clear state data
+def reset_application_state():
+    st.session_state.processed = False
+    st.session_state.main_pdf_data = None
+    st.session_state.duplicate_pdf_data = None
+    st.session_state.cropped_pdf_data = None
+    st.session_state.all_pages = []
+    st.session_state.main_pages = []
+    st.session_state.duplicate_pages = []
+    st.session_state.exchange_orders = []
+    st.session_state.bulk_orders = []
+    st.session_state.duplicate_groups = []
+    st.session_state.last_uploaded_fingerprint = None
+
+
 uploaded_files = st.file_uploader(
     "Upload one or more PDFs",
     type=["pdf"],
     accept_multiple_files=True,
+    key="pdf_uploader_file_input"
 )
+
+# Compute fingerprint to track changes in uploaded files
+current_fingerprint = None
+if uploaded_files:
+    current_fingerprint = "+".join([f"{f.name}_{f.size}" for f in uploaded_files])
+
+# Reset state automatically if the file selection changes
+if current_fingerprint != st.session_state.last_uploaded_fingerprint:
+    reset_application_state()
+    st.session_state.last_uploaded_fingerprint = current_fingerprint
 
 SIZE_RANK = {
     "S": 1,
@@ -433,7 +484,7 @@ def generate_pdf(reader, final_pages):
     buffer = io.BytesIO()
     writer.write(buffer)
     buffer.seek(0)
-    return buffer
+    return buffer.getvalue()
 
 
 def generate_cropped_pdf(original_pdf_bytes, main_pages):
@@ -480,7 +531,7 @@ def generate_cropped_pdf(original_pdf_bytes, main_pages):
     pdf = output.tobytes()
     output.close()
     source.close()
-    return io.BytesIO(pdf)
+    return pdf
 
 
 def show_exchange_summary(exchange_orders):
@@ -565,79 +616,118 @@ def show_parser_warnings(all_pages):
         st.dataframe(warnings, hide_index=True, use_container_width=True)
 
 
+# --- APPLICATION FLOW ENGINE LAYER ---
 if uploaded_files:
-    with st.spinner("Merging uploaded files..."):
-        combined_writer = pypdf.PdfWriter()
-        for uploaded_file in uploaded_files:
-            reader = pypdf.PdfReader(uploaded_file)
-            for page in reader.pages:
-                combined_writer.add_page(page)
+    # Render operational buttons layout side-by-side
+    btn_col1, btn_col2 = st.columns([3, 1])
+    
+    with btn_col1:
+        # The engine triggers explicitly ONLY on this click event
+        process_triggered = st.button("🚀 Process PDF", use_container_width=True, type="primary")
         
-        buffer = io.BytesIO()
-        combined_writer.write(buffer)
-        buffer.seek(0)
-        file_bytes = buffer.getvalue()
+    with btn_col2:
+        if st.button("🗑️ Reset", use_container_width=True):
+            reset_application_state()
+            st.rerun()
 
-    with st.spinner("Reading combined PDF..."):
-        reader, all_pages = parse_pdf(file_bytes)
+    # Heavy execution block now strictly waits for explicit execution confirmation
+    if process_triggered and not st.session_state.processed:
+        with st.spinner("Merging uploaded files into unified buffer..."):
+            combined_writer = pypdf.PdfWriter()
+            for uploaded_file in uploaded_files:
+                reader = pypdf.PdfReader(uploaded_file)
+                for page in reader.pages:
+                    combined_writer.add_page(page)
+            
+            buffer = io.BytesIO()
+            combined_writer.write(buffer)
+            buffer.seek(0)
+            file_bytes = buffer.getvalue()
 
-    (
-        main_pages,
-        duplicate_pages,
-        normal_orders,
-        exchange_orders,
-        bulk_orders,
-        duplicate_groups,
-    ) = build_final_order(all_pages)
+        with st.spinner("Extracting tokens & mapping logistics matrix..."):
+            reader, all_pages = parse_pdf(file_bytes)
 
-    st.success(
-        f"Processed {len(all_pages)} Pages\n\n"
-        f"Main PDF : {len(main_pages)} Pages\n\n"
-        f"Duplicate PDF : {len(duplicate_pages)} Pages"
-    )
+        (
+            main_pages,
+            duplicate_pages,
+            normal_orders,
+            exchange_orders,
+            bulk_orders,
+            duplicate_groups,
+        ) = build_final_order(all_pages)
 
-    with st.spinner("Generating PDFs..."):
-        main_pdf = generate_pdf(reader, main_pages)
-        duplicate_pdf = generate_pdf(reader, duplicate_pages)
-        cropped_pdf = generate_cropped_pdf(file_bytes, main_pages)
+        with st.spinner("Rendering output document structures..."):
+            main_pdf_bytes = generate_pdf(reader, main_pages)
+            duplicate_pdf_bytes = generate_pdf(reader, duplicate_pages)
+            cropped_pdf_bytes = generate_cropped_pdf(file_bytes, main_pages)
 
-    show_debug_table(main_pages, duplicate_pages, exchange_orders, bulk_orders)
+        # Store everything securely inside memory layer
+        st.session_state.all_pages = all_pages
+        st.session_state.main_pages = main_pages
+        st.session_state.duplicate_pages = duplicate_pages
+        st.session_state.exchange_orders = exchange_orders
+        st.session_state.bulk_orders = bulk_orders
+        st.session_state.duplicate_groups = duplicate_groups
+        
+        st.session_state.main_pdf_data = main_pdf_bytes
+        st.session_state.duplicate_pdf_data = duplicate_pdf_bytes
+        st.session_state.cropped_pdf_data = cropped_pdf_bytes
+        st.session_state.processed = True
+        st.rerun()
 
-    st.markdown("---")
-    st.subheader("📥 Download PDFs")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.download_button(
-            "📄 Main PDF",
-            data=main_pdf,
-            file_name="Sorted_Main.pdf",
-            mime="application/pdf",
-            use_container_width=True,
+    # Renders the full analysis dashboard once session memory contains parsed data
+    if st.session_state.processed:
+        st.success(
+            f"Processed {len(st.session_state.all_pages)} Pages\n\n"
+            f"Main PDF : {len(st.session_state.main_pages)} Pages\n\n"
+            f"Duplicate PDF : {len(st.session_state.duplicate_pages)} Pages"
         )
-    with col2:
-        st.download_button(
-            "👥 Duplicate PDF",
-            data=duplicate_pdf,
-            file_name="Duplicate_Orders.pdf",
-            mime="application/pdf",
-            use_container_width=True,
-        )
-    with col3:
-        st.download_button(
-            "✂️ Cropped PDF",
-            data=cropped_pdf,
-            file_name="Cropped_Main.pdf",
-            mime="application/pdf",
-            use_container_width=True,
-        )
-    st.markdown("---")
 
-    show_exchange_summary(exchange_orders)
-    show_packing_summary(main_pages)
-    show_parser_warnings(all_pages)
+        show_debug_table(
+            st.session_state.main_pages, 
+            st.session_state.duplicate_pages, 
+            st.session_state.exchange_orders, 
+            st.session_state.bulk_orders
+        )
 
-    st.markdown("---")
-    if duplicate_pages:
-        show_duplicate_groups(duplicate_groups)
-    st.markdown("---")
-    st.success("Done ✅")
+        st.markdown("---")
+        st.subheader("📥 Download PDFs")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.download_button(
+                "📄 Main PDF",
+                data=st.session_state.main_pdf_data,
+                file_name="Sorted_Main.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+        with col2:
+            st.download_button(
+                "👥 Duplicate PDF",
+                data=st.session_state.duplicate_pdf_data,
+                file_name="Duplicate_Orders.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+        with col3:
+            st.download_button(
+                "✂️ Cropped PDF",
+                data=st.session_state.cropped_pdf_data,
+                file_name="Cropped_Main.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+        
+        st.markdown("---")
+        show_exchange_summary(st.session_state.exchange_orders)
+        show_packing_summary(st.session_state.main_pages)
+        show_parser_warnings(st.session_state.all_pages)
+
+        st.markdown("---")
+        if st.session_state.duplicate_pages:
+            show_duplicate_groups(st.session_state.duplicate_groups)
+        st.markdown("---")
+        st.success("Done ✅")
+else:
+    st.warning("Awaiting file upload context. Please drop label manifest files above.")
