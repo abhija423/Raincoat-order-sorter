@@ -447,28 +447,25 @@ def generate_cropped_pdf(original_pdf_bytes, main_pages):
         page = source.load_page(page_info["idx"])
         rect = page.rect
 
-        if page_info["is_exchange"]:
-            clip = rect
+        areas = page.search_for("BILL TO / SHIP TO")
+
+        if not areas:
+            areas = page.search_for("BILL TO")
+
+        if not areas:
+            areas = page.search_for("SHIP TO")
+
+        if areas:
+            keep_bottom = areas[0].y0 - MARGIN
         else:
-            areas = page.search_for("BILL TO / SHIP TO")
+            keep_bottom = rect.height
 
-            if not areas:
-                areas = page.search_for("BILL TO")
-
-            if not areas:
-                areas = page.search_for("SHIP TO")
-
-            if areas:
-                keep_bottom = areas[0].y0 - MARGIN
-            else:
-                keep_bottom = rect.height
-
-            clip = fitz.Rect(
-                0,
-                0,
-                rect.width,
-                keep_bottom,
-            )
+        clip = fitz.Rect(
+            0,
+            0,
+            rect.width,
+            keep_bottom,
+        )
 
         new_page = output.new_page(
             width=clip.width,
