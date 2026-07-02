@@ -13,14 +13,12 @@ st.set_page_config(
 
 st.title("📦 Raincoat Order Sorting Engine")
 
-# --- Modification 1: Initialize Session State ---
 if "processed" not in st.session_state:
     st.session_state.processed = False
 
 if "results" not in st.session_state:
     st.session_state.results = None
 
-# --- Modification 2: Reset Engine Button ---
 if st.button("🔄 Reset Engine", use_container_width=True):
     st.cache_data.clear()
     st.cache_resource.clear()
@@ -28,7 +26,7 @@ if st.button("🔄 Reset Engine", use_container_width=True):
         del st.session_state[k]
     st.rerun()
 
-# --- Modification 3: Conditional File Uploader ---
+# --- Replaced File Uploader with Custom Process Button Logic ---
 if not st.session_state.processed:
     uploaded_files = st.file_uploader(
         "Upload one or more PDFs",
@@ -36,8 +34,14 @@ if not st.session_state.processed:
         accept_multiple_files=True,
         key="pdf_uploader",
     )
+    process_clicked = st.button(
+        "🚀 Process PDFs",
+        type="primary",
+        use_container_width=True,
+    )
 else:
     uploaded_files = None
+    process_clicked = False
 
 SIZE_RANK = {
     "S": 1,
@@ -585,8 +589,8 @@ def show_parser_warnings(all_pages):
         st.dataframe(warnings, hide_index=True, use_container_width=True)
 
 
-# Processing Routine (Only runs if files are loaded and not yet processed)
-if uploaded_files:
+# --- Replaced condition block to wait for explicit process click button ---
+if uploaded_files and process_clicked:
     with st.spinner("Merging uploaded files..."):
         combined_writer = pypdf.PdfWriter()
         for uploaded_file in uploaded_files:
@@ -616,7 +620,6 @@ if uploaded_files:
         duplicate_pdf = generate_pdf(reader, duplicate_pages)
         cropped_pdf = generate_cropped_pdf(file_bytes, main_pages)
 
-    # --- Modification 4 Part 1: Save Results and Re-run ---
     st.session_state.results = {
         "main": main_pdf.getvalue(),
         "duplicate": duplicate_pdf.getvalue(),
@@ -634,7 +637,6 @@ if uploaded_files:
     st.rerun()
 
 
-# --- Modification 4 Part 2: Persistent Results Display Zone ---
 if st.session_state.processed:
     (
         main_pages,
