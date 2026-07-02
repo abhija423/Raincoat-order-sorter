@@ -503,6 +503,18 @@ if i % 20 == 0 or i == total - 1:
         f"### 📄 Generating Main PDF\n"
         f"**Processed:** {i+1:,} / {total:,} pages"
     )
+    elapsed = time.perf_counter() - start
+
+avg = elapsed / (i + 1)
+
+remaining = avg * (total - i - 1)
+
+mins = int(remaining // 60)
+secs = int(remaining % 60)
+
+eta.markdown(
+    f"⏱ Estimated time remaining: **{mins}m {secs}s**"
+)
         writer.add_page(reader.pages[page["idx"]])
         
     progress.empty()
