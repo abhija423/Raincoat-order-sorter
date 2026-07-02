@@ -1,9 +1,19 @@
 import io
+import os
 import re
+import gc
+import tempfile
 from collections import defaultdict
 import fitz
 import pypdf
 import streamlit as st
+
+# Initialize Session State Variables at the top
+if "processed" not in st.session_state:
+    st.session_state.processed = False
+
+if "results" not in st.session_state:
+    st.session_state.results = None
 
 st.set_page_config(
     page_title="Raincoat Order Sorter",
@@ -13,11 +23,24 @@ st.set_page_config(
 
 st.title("📦 Raincoat Order Sorting Engine")
 
-uploaded_files = st.file_uploader(
-    "Upload one or more PDFs",
-    type=["pdf"],
-    accept_multiple_files=True,
-)
+# 1. RESET BUTTON BLOCK
+if st.button("🔄 Reset Engine"):
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    
+    # Clean up any residual temporary files stored in session state paths
+    if st.session_state.results:
+        for path_key in ["main_path", "duplicate_path", "cropped_path"]:
+            path = st.session_state.results.get(path_key)
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except:
+                    pass
+
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    st.rerun()
 
 SIZE_RANK = {
     "S": 1,
@@ -28,7 +51,6 @@ SIZE_RANK = {
     "XXXL": 6,
     "FREE SIZE": 7,
 }
-
 
 def normalize(text):
     if not text:
@@ -41,22 +63,12 @@ def normalize(text):
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
-
 def create_address_fingerprint(address):
     address = normalize(address)
     remove_words = {
-        "india",
-        "district",
-        "state",
-        "near",
-        "opp",
-        "opposite",
-        "landmark",
-        "po",
-        "post",
-        "ps",
-        "police",
-        "station",
+        "india", "district", "state", "near", "opp", 
+        "opposite", "landmark", "po", "post", "ps", 
+        "police", "station"
     }
     words = []
     for word in address.split():
@@ -65,13 +77,11 @@ def create_address_fingerprint(address):
         words.append(word)
     return " ".join(words)
 
-
 def get_size_rank(size):
     size = size.upper().strip()
     if size in SIZE_RANK:
         return SIZE_RANK[size]
     return 99
-
 
 def get_color_rank(color):
     color = color.lower()
@@ -83,7 +93,6 @@ def get_color_rank(color):
         return 3
     return 99
 
-
 def parse_product_table(text):
     lines = []
     for line in text.splitlines():
@@ -92,12 +101,7 @@ def parse_product_table(text):
             lines.append(line)
 
     for i, line in enumerate(lines):
-        if (
-            "SKU" in line
-            and "Size" in line
-            and "Qty" in line
-            and "Color" in line
-        ):
+        if "SKU" in line and "Size" in line and "Qty" in line and "Color" in line:
             if i + 1 >= len(lines):
                 break
 
@@ -144,22 +148,9 @@ def parse_product_table(text):
                         color = "Black"
                     order = tokens[-1]
 
-            return {
-                "sku": sku,
-                "size": size,
-                "qty": qty,
-                "color": color,
-                "order": order,
-            }
+            return {"sku": sku, "size": size, "qty": qty, "color": color, "order": order}
 
-    return {
-        "sku": "",
-        "size": "",
-        "qty": 1,
-        "color": "",
-        "order": "",
-    }
-
+    return {"sku": "", "size": "", "qty": 1, "color": "", "order": ""}
 
 def extract_customer(text):
     name = "Unknown"
@@ -184,18 +175,10 @@ def extract_customer(text):
 
     address = create_address_fingerprint(bill)
     identity = (normalize(name), address, pin)
-    return {
-        "name": name,
-        "address": address,
-        "pin": pin,
-        "phone": phone,
-        "identity": identity,
-    }
-
+    return {"name": name, "address": address, "pin": pin, "phone": phone, "identity": identity}
 
 def detect_exchange(text):
     work_text = text
-
     customer_block = re.search(r"Customer Address[\s\S]*?If undelivered", work_text, re.I)
     if customer_block:
         work_text = work_text.replace(customer_block.group(0), "")
@@ -207,23 +190,18 @@ def detect_exchange(text):
     work_text = re.sub(r"\s+", " ", work_text).lower()
 
     exchange_patterns = [
-        r"\bexchange order\b",
-        r"\bexchange shipment\b",
-        r"\breplacement order\b",
-        r"\breplacement shipment\b",
-        r"\breplacement\b",
-        r"\bexchange\b",
+        r"\bexchange order\b", r"\bexchange shipment\b",
+        r"\breplacement order\b", r"\breplacement shipment\b",
+        r"\breplacement\b", r"\bexchange\b"
     ]
 
     for pattern in exchange_patterns:
         if re.search(pattern, work_text):
             return True
-
     return False
 
-
-def parse_pdf(pdf_bytes):
-    reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+def parse_pdf(file_path):
+    reader = pypdf.PdfReader(file_path)
     pages = []
     progress = st.progress(0)
     total = len(reader.pages)
@@ -235,52 +213,37 @@ def parse_pdf(pdf_bytes):
         customer = extract_customer(text)
         is_exchange = detect_exchange(text)
 
-        pages.append(
-            {
-                "idx": idx,
-                "page": idx + 1,
-                "reader_page": page,
-                "text": text,
-                "name": customer["name"],
-                "identity": customer["identity"],
-                "address": customer["address"],
-                "pin": customer["pin"],
-                "phone": customer["phone"],
-                "sku": product["sku"],
-                "qty": product["qty"],
-                "size": product["size"],
-                "size_rank": get_size_rank(product["size"]),
-                "color": product["color"],
-                "color_rank": get_color_rank(product["color"]),
-                "order": product["order"],
-                "is_exchange": is_exchange,
-            }
-        )
+        pages.append({
+            "idx": idx,
+            "page": idx + 1,
+            "text": text,
+            "name": customer["name"],
+            "identity": customer["identity"],
+            "address": customer["address"],
+            "pin": customer["pin"],
+            "phone": customer["phone"],
+            "sku": product["sku"],
+            "qty": product["qty"],
+            "size": product["size"],
+            "size_rank": get_size_rank(product["size"]),
+            "color": product["color"],
+            "color_rank": get_color_rank(product["color"]),
+            "order": product["order"],
+            "is_exchange": is_exchange,
+        })
     progress.empty()
-    return reader, pages
-
+    return pages
 
 def same_customer(identity1, identity2):
-    if identity1[0] != identity2[0]:
+    if identity1[0] != identity2[0] or identity1[2] != identity2[2]:
         return False
-    if identity1[2] != identity2[2]:
-        return False
-
-    addr1 = identity1[1]
-    addr2 = identity2[1]
-
-    words1 = set(addr1.split())
-    words2 = set(addr2.split())
-
+    addr1, addr2 = identity1[1], identity2[1]
+    words1, words2 = set(addr1.split()), set(addr2.split())
     common = len(words1 & words2)
     smaller = min(len(words1), len(words2))
-
     if smaller == 0:
         return False
-
-    similarity = common / smaller
-    return similarity >= 0.85
-
+    return (common / smaller) >= 0.85
 
 def split_orders(all_pages):
     groups = []
@@ -313,23 +276,11 @@ def split_orders(all_pages):
         else:
             normal_orders.append(page)
 
-    duplicate_order_groups.sort(
-        key=lambda g: (g[0]["name"].lower(), g[0]["page"])
-    )
+    duplicate_order_groups.sort(key=lambda g: (g[0]["name"].lower(), g[0]["page"]))
     return normal_orders, exchange_orders, bulk_orders, duplicate_order_groups
 
-
 def sort_normal_orders(orders):
-    return sorted(
-        orders, key=lambda x: (x["color_rank"], x["size_rank"], x["page"])
-    )
-
-
-def sort_bulk_orders(orders):
-    return sorted(
-        orders, key=lambda x: (x["color_rank"], x["size_rank"], x["page"])
-    )
-
+    return sorted(orders, key=lambda x: (x["color_rank"], x["size_rank"], x["page"]))
 
 def flatten_duplicate_groups(groups):
     final = []
@@ -338,106 +289,32 @@ def flatten_duplicate_groups(groups):
         final.extend(group)
     return final
 
-
 def build_final_order(all_pages):
-    (
-        normal_orders,
-        exchange_orders,
-        bulk_orders,
-        duplicate_groups,
-    ) = split_orders(all_pages)
+    normal_orders, exchange_orders, bulk_orders, duplicate_groups = split_orders(all_pages)
 
     normal_sorted = sort_normal_orders(normal_orders)
     exchange_sorted = sort_normal_orders(exchange_orders)
-    bulk_sorted = sort_bulk_orders(bulk_orders)
+    bulk_sorted = sort_normal_orders(bulk_orders)
     duplicate_sorted = flatten_duplicate_groups(duplicate_groups)
 
     main_pdf_pages = normal_sorted + exchange_sorted + bulk_sorted
-    return (
-        main_pdf_pages,
-        duplicate_sorted,
-        normal_sorted,
-        exchange_sorted,
-        bulk_sorted,
-        duplicate_groups,
-    )
+    return main_pdf_pages, duplicate_sorted, normal_sorted, exchange_sorted, bulk_sorted, duplicate_groups
 
-
-def show_debug_table(main_pages, duplicate_pages, exchange_orders, bulk_orders):
-    st.subheader("📊 Sorting Summary")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Main PDF", len(main_pages))
-    c2.metric("Duplicate PDF", len(duplicate_pages))
-    c3.metric("Exchange", len(exchange_orders))
-    c4.metric("Bulk Qty", len(bulk_orders))
-
-    rows = []
-    for new_page, page in enumerate(main_pages, start=1):
-        if page["is_exchange"]:
-            bucket = "Exchange"
-        elif page["qty"] > 1:
-            bucket = "Bulk Qty"
-        else:
-            bucket = "Normal"
-
-        rows.append(
-            {
-                "Output": new_page,
-                "Original": page["page"],
-                "Customer": page["name"],
-                "Color": page["color"],
-                "Size": page["size"],
-                "Qty": page["qty"],
-                "Bucket": bucket,
-            }
-        )
-
-    offset = len(main_pages)
-    for i, page in enumerate(duplicate_pages, start=1):
-        rows.append(
-            {
-                "Output": offset + i,
-                "Original": page["page"],
-                "Customer": page["name"],
-                "Color": page["color"],
-                "Size": page["size"],
-                "Qty": page["qty"],
-                "Bucket": "Duplicate",
-            }
-        )
-
-    with st.expander("Page Movement"):
-        st.dataframe(rows, hide_index=True, use_container_width=True)
-
-
-def show_duplicate_groups(duplicate_groups):
-    if not duplicate_groups:
-        return
-    st.subheader("Duplicate Customers")
-    for group in duplicate_groups:
-        first = group[0]
-        pages = " , ".join(str(x["page"]) for x in group)
-        st.markdown(
-            f"**{first['name']}**\n\nPages : {pages}\n\nPIN : {first['pin']}\n\nOrders : {len(group)}"
-        )
-
-
-def generate_pdf(reader, final_pages):
+def generate_pdf_on_disk(src_path, final_pages, filename):
+    reader = pypdf.PdfReader(src_path)
     writer = pypdf.PdfWriter()
-    progress = st.progress(0)
-    total = len(final_pages)
-    for i, page in enumerate(final_pages):
+    
+    for page in final_pages:
         writer.add_page(reader.pages[page["idx"]])
-        progress.progress((i + 1) / total)
-    progress.empty()
-    buffer = io.BytesIO()
-    writer.write(buffer)
-    buffer.seek(0)
-    return buffer
+        
+    out_path = os.path.join(tempfile.gettempdir(), filename)
+    with open(out_path, "wb") as f:
+        writer.write(f)
+        
+    return out_path
 
-
-def generate_cropped_pdf(original_pdf_bytes, main_pages):
-    source = fitz.open(stream=original_pdf_bytes, filetype="pdf")
+def generate_cropped_pdf_on_disk(src_path, main_pages, filename):
+    source = fitz.open(src_path)
     output = fitz.open()
 
     label_width = None
@@ -446,7 +323,6 @@ def generate_cropped_pdf(original_pdf_bytes, main_pages):
     for page_info in main_pages:
         page = source.load_page(page_info["idx"])
         rect = page.rect
-
         order_box = page.search_for("Order No.")
 
         if order_box:
@@ -454,34 +330,40 @@ def generate_cropped_pdf(original_pdf_bytes, main_pages):
         else:
             keep_bottom = rect.height
 
-        clip = fitz.Rect(
-            0,
-            0,
-            rect.width,
-            keep_bottom,
-        )
+        clip = fitz.Rect(0, 0, rect.width, keep_bottom)
 
         if label_width is None:
             label_width = clip.width
             label_height = clip.height
 
-        new_page = output.new_page(
-            width=label_width,
-            height=label_height,
-        )
+        new_page = output.new_page(width=label_width, height=label_height)
+        new_page.show_pdf_page(new_page.rect, source, page.number, clip=clip)
 
-        new_page.show_pdf_page(
-            new_page.rect,
-            source,
-            page.number,
-            clip=clip,
-        )
-
-    pdf = output.tobytes()
+    out_path = os.path.join(tempfile.gettempdir(), filename)
+    output.save(out_path, garbage=4, deflate=True)
     output.close()
     source.close()
-    return io.BytesIO(pdf)
+    return out_path
 
+def show_debug_table(main_pages, duplicate_pages):
+    st.subheader("📊 Sorting Summary")
+    rows = []
+    for new_page, page in enumerate(main_pages, start=1):
+        bucket = "Exchange" if page["is_exchange"] else ("Bulk Qty" if page["qty"] > 1 else "Normal")
+        rows.append({
+            "Output": new_page, "Original": page["page"], "Customer": page["name"],
+            "Color": page["color"], "Size": page["size"], "Qty": page["qty"], "Bucket": bucket
+        })
+
+    offset = len(main_pages)
+    for i, page in enumerate(duplicate_pages, start=1):
+        rows.append({
+            "Output": offset + i, "Original": page["page"], "Customer": page["name"],
+            "Color": page["color"], "Size": page["size"], "Qty": page["qty"], "Bucket": "Duplicate"
+        })
+
+    with st.expander("Page Movement Matrix"):
+        st.dataframe(rows, hide_index=True, use_container_width=True)
 
 def show_exchange_summary(exchange_orders):
     if not exchange_orders:
@@ -496,12 +378,9 @@ def show_exchange_summary(exchange_orders):
 
     st.markdown("---")
     st.subheader("🔄 Exchange Summary")
-    summary = []
-    for size in ["S", "M", "L", "XL", "XXL", "XXXL", "FREE SIZE"]:
-        summary.append({"Size": size, "Qty": size_summary[size]})
+    summary = [{"Size": size, "Qty": size_summary[size]} for size in ["S", "M", "L", "XL", "XXL", "XXXL", "FREE SIZE"]]
     st.table(summary)
-    st.success(f"Total Exchange Quantity : {total_qty}")
-
+    st.success(f"Total Exchange Quantity: {total_qty}")
 
 def show_packing_summary(all_pages):
     summary = defaultdict(int)
@@ -510,8 +389,7 @@ def show_packing_summary(all_pages):
         color = page["color"].upper() if page["color"] else "UNKNOWN COLOR"
         size = page["size"].upper() if page["size"] else "UNKNOWN SIZE"
         qty = page["qty"]
-        key = (color, size)
-        summary[key] += qty
+        summary[(color, size)] += qty
         total_qty += qty
 
     st.markdown("---")
@@ -534,110 +412,135 @@ def show_packing_summary(all_pages):
             subtotal += unknown_qty
 
         st.table(rows)
-        st.success(f"Total {color} : {subtotal}")
+        st.success(f"Total {color}: {subtotal}")
+    st.info(f"Grand Total Pieces: {total_qty}")
 
-    st.info(f"Grand Total Pieces : {total_qty}")
+def show_duplicate_groups(duplicate_groups):
+    if not duplicate_groups:
+        return
+    st.subheader("Duplicate Customers")
+    for group in duplicate_groups:
+        first = group[0]
+        pages = " , ".join(str(x["page"]) for x in group)
+        st.markdown(f"**{first['name']}**\n\nPages: {pages}\n\nPIN: {first['pin']}\n\nOrders: {len(group)}")
 
-
-def show_parser_warnings(all_pages):
-    warnings = []
-    for page in all_pages:
-        issues = []
-        if not page["size"]:
-            issues.append("Missing/Unparsed Size")
-        if not page["color"]:
-            issues.append("Missing/Unparsed Color")
-        if not page["sku"]:
-            issues.append("Unknown/Missing SKU")
-        if page["qty"] <= 0:
-            issues.append(f"Invalid Quantity ({page['qty']})")
-        
-        if issues:
-            warnings.append({
-                "Page": page["page"],
-                "Customer": page["name"],
-                "Issues Found": ", ".join(issues)
-            })
-            
-    if warnings:
-        st.markdown("---")
-        st.warning("⚠️ Parser Warnings (Verify these labels manually before printing)")
-        st.dataframe(warnings, hide_index=True, use_container_width=True)
-
-
-if uploaded_files:
-    with st.spinner("Merging uploaded files..."):
-        combined_writer = pypdf.PdfWriter()
-        for uploaded_file in uploaded_files:
-            reader = pypdf.PdfReader(uploaded_file)
-            for page in reader.pages:
-                combined_writer.add_page(page)
-        
-        buffer = io.BytesIO()
-        combined_writer.write(buffer)
-        buffer.seek(0)
-        file_bytes = buffer.getvalue()
-
-    with st.spinner("Reading combined PDF..."):
-        reader, all_pages = parse_pdf(file_bytes)
-
-    (
-        main_pages,
-        duplicate_pages,
-        normal_orders,
-        exchange_orders,
-        bulk_orders,
-        duplicate_groups,
-    ) = build_final_order(all_pages)
-
-    st.success(
-        f"Processed {len(all_pages)} Pages\n\n"
-        f"Main PDF : {len(main_pages)} Pages\n\n"
-        f"Duplicate PDF : {len(duplicate_pages)} Pages"
+# 2. FILE UPLOADER CONTROL BLOCK (Disappears once processed)
+if not st.session_state.processed:
+    uploaded_files = st.file_uploader(
+        "Upload one or more PDFs",
+        type=["pdf"],
+        accept_multiple_files=True,
     )
 
-    with st.spinner("Generating PDFs..."):
-        main_pdf = generate_pdf(reader, main_pages)
-        duplicate_pdf = generate_pdf(reader, duplicate_pages)
-        cropped_pdf = generate_cropped_pdf(file_bytes, main_pages)
+    if uploaded_files:
+        if st.button("Process PDFs", use_container_width=True):
+            with st.spinner("Writing incoming files safely to disk sandbox..."):
+                # Merge input PDFs tracking streaming buffers down directly into a local scratch file
+                combined_writer = pypdf.PdfWriter()
+                for uploaded_file in uploaded_files:
+                    combined_writer.append(uploaded_file)
+                
+                temp_input_path = os.path.join(tempfile.gettempdir(), "raw_combined.pdf")
+                with open(temp_input_path, "wb") as f:
+                    combined_writer.write(f)
+                
+                del combined_writer
+                gc.collect()
 
-    show_debug_table(main_pages, duplicate_pages, exchange_orders, bulk_orders)
+            with st.spinner("Extracting parameters and structural data fields..."):
+                all_pages = parse_pdf(temp_input_path)
 
-    st.markdown("---")
-    st.subheader("📥 Download PDFs")
+            with st.spinner("Analyzing rules for duplicate profiles, batch splits, and exchange sorting..."):
+                (main_pages, duplicate_pages, normal_orders, 
+                 exchange_orders, bulk_orders, duplicate_groups) = build_final_order(all_pages)
+
+            with st.spinner("Writing optimized outputs directly to system layout storage..."):
+                main_pdf_path = generate_pdf_on_disk(temp_input_path, main_pages, "Sorted_Main.pdf")
+                duplicate_pdf_path = generate_pdf_on_disk(temp_input_path, duplicate_pages, "Duplicate_Orders.pdf")
+                cropped_pdf_path = generate_cropped_pdf_on_disk(temp_input_path, main_pages, "Cropped_Main.pdf")
+
+            # Store absolute system file paths to Session State elements rather than binary payloads
+            st.session_state.results = {
+                "main_path": main_pdf_path,
+                "duplicate_path": duplicate_pdf_path,
+                "cropped_path": cropped_pdf_path,
+                "metrics": {
+                    "all_count": len(all_pages),
+                    "main_count": len(main_pages),
+                    "dup_count": len(duplicate_pages),
+                    "exchange_count": len(exchange_orders),
+                    "bulk_count": len(bulk_orders)
+                },
+                "data_structures": {
+                    "main_pages": main_pages,
+                    "duplicate_pages": duplicate_pages,
+                    "exchange_orders": exchange_orders,
+                    "duplicate_groups": duplicate_groups
+                }
+            }
+            
+            # Remove base input tempfile immediately from memory mapping
+            try:
+                os.remove(temp_input_path)
+            except:
+                pass
+                
+            st.session_state.processed = True
+            gc.collect()
+            st.rerun()
+
+# 3. COMPLETED VIEW (Persistent actions without rendering loops)
+else:
+    metrics = st.session_state.results["metrics"]
+    ds = st.session_state.results["data_structures"]
+
+    st.success(
+        f"Processed {metrics['all_count']} Pages\n\n"
+        f"Main PDF: {metrics['main_count']} Pages\n\n"
+        f"Duplicate PDF: {metrics['dup_count']} Pages"
+    )
+
+    st.subheader("📥 Download Generated Packages")
     col1, col2, col3 = st.columns(3)
+    
     with col1:
-        st.download_button(
-            "📄 Main PDF",
-            data=main_pdf,
-            file_name="Sorted_Main.pdf",
-            mime="application/pdf",
-            use_container_width=True,
-        )
+        with open(st.session_state.results["main_path"], "rb") as f:
+            st.download_button(
+                "📄 Main PDF",
+                data=f,
+                file_name="Sorted_Main.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+            
     with col2:
-        st.download_button(
-            "👥 Duplicate PDF",
-            data=duplicate_pdf,
-            file_name="Duplicate_Orders.pdf",
-            mime="application/pdf",
-            use_container_width=True,
-        )
+        with open(st.session_state.results["duplicate_path"], "rb") as f:
+            st.download_button(
+                "👥 Duplicate PDF",
+                data=f,
+                file_name="Duplicate_Orders.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+            
     with col3:
-        st.download_button(
-            "✂️ Cropped PDF",
-            data=cropped_pdf,
-            file_name="Cropped_Main.pdf",
-            mime="application/pdf",
-            use_container_width=True,
-        )
-    st.markdown("---")
-
-    show_exchange_summary(exchange_orders)
-    show_packing_summary(main_pages)
-    show_parser_warnings(all_pages)
+        with open(st.session_state.results["cropped_path"], "rb") as f:
+            st.download_button(
+                "✂️ Cropped PDF",
+                data=f,
+                file_name="Cropped_Main.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
 
     st.markdown("---")
-    if duplicate_pages:
-        show_duplicate_groups(duplicate_groups)
+    show_debug_table(ds["main_pages"], ds["duplicate_pages"])
+    show_exchange_summary(ds["exchange_orders"])
+    show_packing_summary(ds["main_pages"])
+    
+    if metrics["dup_count"] > 0:
+        st.markdown("---")
+        show_duplicate_groups(ds["duplicate_groups"])
+        
     st.markdown("---")
-    st.success("Done ✅")
+    st.success("All pipelines synchronized ✅ Ready for processing adjustments.")
