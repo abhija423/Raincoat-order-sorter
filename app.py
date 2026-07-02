@@ -459,10 +459,12 @@ def generate_cropped_pdf(original_pdf_bytes, main_pages):
                 rect.height,
             )
         else:
-            areas = page.search_for(
-                "TAX INVOICE",
-                flags=fitz.TEXT_IGNORECASE,
-            )
+            areas = page.search_for("TAX INVOICE")
+            if not areas:
+                areas = page.search_for("Tax Invoice")
+            if not areas:
+                areas = page.search_for("tax invoice")
+
             if areas:
                 invoice = areas[0]
                 crop_y = invoice.y1 + NORMAL_OFFSET
