@@ -440,9 +440,6 @@ def generate_cropped_pdf(original_pdf_bytes, main_pages):
     source = fitz.open(stream=original_pdf_bytes, filetype="pdf")
     output = fitz.open()
 
-    MM = 2.83465
-    MARGIN = 3 * MM
-
     label_width = None
     label_height = None
 
@@ -450,16 +447,10 @@ def generate_cropped_pdf(original_pdf_bytes, main_pages):
         page = source.load_page(page_info["idx"])
         rect = page.rect
 
-        areas = page.search_for("BILL TO / SHIP TO")
+        order_box = page.search_for("Order No.")
 
-        if not areas:
-            areas = page.search_for("BILL TO")
-
-        if not areas:
-            areas = page.search_for("SHIP TO")
-
-        if areas:
-            keep_bottom = areas[0].y0 - MARGIN
+        if order_box:
+            keep_bottom = order_box[0].y1 + 40
         else:
             keep_bottom = rect.height
 
