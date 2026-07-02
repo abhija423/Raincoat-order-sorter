@@ -1,6 +1,7 @@
 import io
 import re
 from collections import defaultdict
+import fitz
 import pypdf
 import streamlit as st
 
@@ -10,9 +11,13 @@ st.set_page_config(
     layout="centered",
 )
 
-st.title("📦 Raincoat Order Sorting Engine")
+st.title("📦 Raincoat Order Sorting Engine V2")
 
-uploaded_file = st.file_uploader("Upload PDF", type=["pdf"])
+uploaded_files = st.file_uploader(
+    "Upload one or more PDFs",
+    type=["pdf"],
+    accept_multiple_files=True,
+)
 
 SIZE_RANK = {
     "S": 1,
@@ -50,7 +55,8 @@ def create_address_fingerprint(address):
         "po",
         "post",
         "ps",
-        "police station",
+        "police",
+        "station",
     }
     words = []
     for word in address.split():
@@ -429,6 +435,59 @@ def generate_pdf(reader, final_pages):
     return buffer
 
 
+def generate_cropped_pdf(original_pdf_bytes, main_pages):
+    source = fitz.open(stream=original_pdf_bytes, filetype="pdf")
+    output = fitz.open()
+
+    MM_TO_PT = 2.83465
+    NORMAL_OFFSET = 3 * MM_TO_PT
+    EXCHANGE_CROP = 235
+
+    for page_info in main_pages:
+        page = source.load_page(page_info["idx"])
+        rect = page.rect
+        new_page = output.new_page(
+            width=rect.width,
+            height=rect.height,
+        )
+
+        if page_info["is_exchange"]:
+            clip = fitz.Rect(
+                0,
+                EXCHANGE_CROP,
+                rect.width,
+                rect.height,
+            )
+        else:
+            areas = page.search_for(
+                "TAX INVOICE",
+                flags=fitz.TEXT_IGNORECASE,
+            )
+            if areas:
+                invoice = areas[0]
+                crop_y = invoice.y1 + NORMAL_OFFSET
+                clip = fitz.Rect(
+                    0,
+                    crop_y,
+                    rect.width,
+                    rect.height,
+                )
+            else:
+                clip = rect
+
+        new_page.show_pdf_page(
+            new_page.rect,
+            source,
+            page.number,
+            clip=clip,
+        )
+
+    pdf_bytes = output.tobytes()
+    output.close()
+    source.close()
+    return io.BytesIO(pdf_bytes)
+
+
 def show_metrics(normal_orders, exchange_orders, bulk_orders, duplicate_groups):
     duplicate_pages = sum(len(g) for g in duplicate_groups)
     c1, c2, c3, c4 = st.columns(4)
@@ -520,9 +579,20 @@ def show_parser_warnings(all_pages):
         st.dataframe(warnings, hide_index=True, use_container_width=True)
 
 
-if uploaded_file is not None:
-    file_bytes = uploaded_file.read()
-    with st.spinner("Reading PDF..."):
+if uploaded_files:
+    with st.spinner("Merging uploaded files..."):
+        combined_writer = pypdf.PdfWriter()
+        for uploaded_file in uploaded_files:
+            reader = pypdf.PdfReader(uploaded_file)
+            for page in reader.pages:
+                combined_writer.add_page(page)
+        
+        buffer = io.BytesIO()
+        combined_writer.write(buffer)
+        buffer.seek(0)
+        file_bytes = buffer.getvalue()
+
+    with st.spinner("Reading combined PDF..."):
         reader, all_pages = parse_pdf(file_bytes)
 
     (
@@ -554,6 +624,7 @@ if uploaded_file is not None:
     with st.spinner("Generating PDFs..."):
         main_pdf = generate_pdf(reader, main_pages)
         duplicate_pdf = generate_pdf(reader, duplicate_pages)
+        cropped_pdf = generate_cropped_pdf(file_bytes, main_pages)
 
     st.subheader("Download Files")
     col1, col2 = st.columns(2)
@@ -573,4 +644,12 @@ if uploaded_file is not None:
             mime="application/pdf",
             use_container_width=True,
         )
+    
+    st.download_button(
+        "📥 Download Cropped Main PDF",
+        data=cropped_pdf,
+        file_name="Cropped_Main.pdf",
+        mime="application/pdf",
+        use_container_width=True,
+    )
     st.success("Done ✅")
