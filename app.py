@@ -11,7 +11,7 @@ st.set_page_config(
     layout="centered",
 )
 
-st.title("📦 Raincoat Order Sorting Engine V2")
+st.title("📦 Raincoat Order Sorting Engine")
 
 uploaded_files = st.file_uploader(
     "Upload one or more PDFs",
