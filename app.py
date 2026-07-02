@@ -13,11 +13,31 @@ st.set_page_config(
 
 st.title("📦 Raincoat Order Sorting Engine")
 
-uploaded_files = st.file_uploader(
-    "Upload one or more PDFs",
-    type=["pdf"],
-    accept_multiple_files=True,
-)
+# --- Modification 1: Initialize Session State ---
+if "processed" not in st.session_state:
+    st.session_state.processed = False
+
+if "results" not in st.session_state:
+    st.session_state.results = None
+
+# --- Modification 2: Reset Engine Button ---
+if st.button("🔄 Reset Engine", use_container_width=True):
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    for k in list(st.session_state.keys()):
+        del st.session_state[k]
+    st.rerun()
+
+# --- Modification 3: Conditional File Uploader ---
+if not st.session_state.processed:
+    uploaded_files = st.file_uploader(
+        "Upload one or more PDFs",
+        type=["pdf"],
+        accept_multiple_files=True,
+        key="pdf_uploader",
+    )
+else:
+    uploaded_files = None
 
 SIZE_RANK = {
     "S": 1,
@@ -565,6 +585,7 @@ def show_parser_warnings(all_pages):
         st.dataframe(warnings, hide_index=True, use_container_width=True)
 
 
+# Processing Routine (Only runs if files are loaded and not yet processed)
 if uploaded_files:
     with st.spinner("Merging uploaded files..."):
         combined_writer = pypdf.PdfWriter()
@@ -590,54 +611,84 @@ if uploaded_files:
         duplicate_groups,
     ) = build_final_order(all_pages)
 
+    with st.spinner("Generating PDFs..."):
+        main_pdf = generate_pdf(reader, main_pages)
+        duplicate_pdf = generate_pdf(reader, duplicate_pages)
+        cropped_pdf = generate_cropped_pdf(file_bytes, main_pages)
+
+    # --- Modification 4 Part 1: Save Results and Re-run ---
+    st.session_state.results = {
+        "main": main_pdf.getvalue(),
+        "duplicate": duplicate_pdf.getvalue(),
+        "cropped": cropped_pdf.getvalue(),
+        "summary": (
+            main_pages,
+            duplicate_pages,
+            exchange_orders,
+            bulk_orders,
+            duplicate_groups,
+            all_pages,
+        ),
+    }
+    st.session_state.processed = True
+    st.rerun()
+
+
+# --- Modification 4 Part 2: Persistent Results Display Zone ---
+if st.session_state.processed:
+    (
+        main_pages,
+        duplicate_pages,
+        exchange_orders,
+        bulk_orders,
+        duplicate_groups,
+        all_pages,
+    ) = st.session_state.results["summary"]
+
     st.success(
         f"Processed {len(all_pages)} Pages\n\n"
         f"Main PDF : {len(main_pages)} Pages\n\n"
         f"Duplicate PDF : {len(duplicate_pages)} Pages"
     )
 
-    with st.spinner("Generating PDFs..."):
-        main_pdf = generate_pdf(reader, main_pages)
-        duplicate_pdf = generate_pdf(reader, duplicate_pages)
-        cropped_pdf = generate_cropped_pdf(file_bytes, main_pages)
-
-    show_debug_table(main_pages, duplicate_pages, exchange_orders, bulk_orders)
-
     st.markdown("---")
     st.subheader("📥 Download PDFs")
     col1, col2, col3 = st.columns(3)
+
     with col1:
         st.download_button(
             "📄 Main PDF",
-            data=main_pdf,
-            file_name="Sorted_Main.pdf",
+            st.session_state.results["main"],
+            "Sorted_Main.pdf",
             mime="application/pdf",
             use_container_width=True,
         )
+
     with col2:
         st.download_button(
             "👥 Duplicate PDF",
-            data=duplicate_pdf,
-            file_name="Duplicate_Orders.pdf",
+            st.session_state.results["duplicate"],
+            "Duplicate_Orders.pdf",
             mime="application/pdf",
             use_container_width=True,
         )
+
     with col3:
         st.download_button(
             "✂️ Cropped PDF",
-            data=cropped_pdf,
-            file_name="Cropped_Main.pdf",
+            st.session_state.results["cropped"],
+            "Cropped_Main.pdf",
             mime="application/pdf",
             use_container_width=True,
         )
-    st.markdown("---")
 
+    show_debug_table(main_pages, duplicate_pages, exchange_orders, bulk_orders)
     show_exchange_summary(exchange_orders)
     show_packing_summary(main_pages)
     show_parser_warnings(all_pages)
 
-    st.markdown("---")
     if duplicate_pages:
         show_duplicate_groups(duplicate_groups)
+        
     st.markdown("---")
     st.success("Done ✅")
