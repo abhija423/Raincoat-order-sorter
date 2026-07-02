@@ -443,6 +443,9 @@ def generate_cropped_pdf(original_pdf_bytes, main_pages):
     MM = 2.83465
     MARGIN = 3 * MM
 
+    label_width = None
+    label_height = None
+
     for page_info in main_pages:
         page = source.load_page(page_info["idx"])
         rect = page.rect
@@ -467,9 +470,13 @@ def generate_cropped_pdf(original_pdf_bytes, main_pages):
             keep_bottom,
         )
 
+        if label_width is None:
+            label_width = clip.width
+            label_height = clip.height
+
         new_page = output.new_page(
-            width=clip.width,
-            height=clip.height,
+            width=label_width,
+            height=label_height,
         )
 
         new_page.show_pdf_page(
