@@ -439,25 +439,14 @@ def generate_cropped_pdf(original_pdf_bytes, main_pages):
     source = fitz.open(stream=original_pdf_bytes, filetype="pdf")
     output = fitz.open()
 
-    MM_TO_PT = 2.83465
-    NORMAL_OFFSET = 3 * MM_TO_PT
     EXCHANGE_CROP = 235
 
     for page_info in main_pages:
         page = source.load_page(page_info["idx"])
         rect = page.rect
-        new_page = output.new_page(
-            width=rect.width,
-            height=rect.height,
-        )
 
         if page_info["is_exchange"]:
-            clip = fitz.Rect(
-                0,
-                EXCHANGE_CROP,
-                rect.width,
-                rect.height,
-            )
+            crop_y = EXCHANGE_CROP
         else:
             areas = page.search_for("TAX INVOICE")
             if not areas:
@@ -466,19 +455,31 @@ def generate_cropped_pdf(original_pdf_bytes, main_pages):
                 areas = page.search_for("tax invoice")
 
             if areas:
-                invoice = areas[0]
-                crop_y = invoice.y1 + NORMAL_OFFSET
-                clip = fitz.Rect(
-                    0,
-                    crop_y,
-                    rect.width,
-                    rect.height,
-                )
+                crop_y = areas[0].y1 + 6
             else:
-                clip = rect
+                crop_y = 0
+
+        clip = fitz.Rect(
+            0,
+            crop_y,
+            rect.width,
+            rect.height,
+        )
+
+        new_height = rect.height - crop_y
+
+        new_page = output.new_page(
+            width=rect.width,
+            height=new_height,
+        )
 
         new_page.show_pdf_page(
-            new_page.rect,
+            fitz.Rect(
+                0,
+                0,
+                rect.width,
+                new_height,
+            ),
             source,
             page.number,
             clip=clip,
