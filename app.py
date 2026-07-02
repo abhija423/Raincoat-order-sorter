@@ -1,7 +1,7 @@
 import io
 import re
 from collections import defaultdict
-import fitz
+import fitz  # PyMuPDF
 import pypdf
 import streamlit as st
 
@@ -12,6 +12,26 @@ st.set_page_config(
 )
 
 st.title("📦 Raincoat Order Sorting Engine")
+
+# --- Compiled Regular Expressions (Compiled Once) ---
+CUSTOMER_RE = re.compile(r"Customer Address\s*(.*?)\n", re.S | re.I)
+BILL_RE = re.compile(r"BILL TO\s*/\s*SHIP TO(.*?)(?:Sold by)", re.S | re.I)
+PIN_RE = re.compile(r"\b(\d{6})\b")
+PHONE_RE = re.compile(r"\b([6-9]\d{9})\b")
+FREE_SIZE_RE = re.compile(r"FREE SIZE\s+(\d+)", re.I)
+
+EXCHANGE_PATTERNS = [
+    re.compile(r"\bexchange order\b"),
+    re.compile(r"\bexchange shipment\b"),
+    re.compile(r"\breplacement order\b"),
+    re.compile(r"\breplacement shipment\b"),
+    re.compile(r"\breplacement\b"),
+    re.compile(r"\bexchange\b"),
+]
+
+CUSTOMER_BLOCK_RE = re.compile(r"Customer Address[\s\S]*?If undelivered", re.I)
+BILL_BLOCK_RE = re.compile(r"BILL TO\s*/\s*SHIP TO[\s\S]*", re.I)
+SPACES_RE = re.compile(r"\s+")
 
 # --- Dynamic Key & State Initialization ---
 if "uploader_key" not in st.session_state:
@@ -24,7 +44,7 @@ if "results" not in st.session_state:
     st.session_state.results = None
 
 
-# --- Updated Reset Engine Button ---
+# --- Reset Engine Button ---
 if st.button("🔄 Reset Engine", use_container_width=True):
     st.cache_data.clear()
     st.cache_resource.clear()
@@ -32,12 +52,11 @@ if st.button("🔄 Reset Engine", use_container_width=True):
     st.session_state.processed = False
     st.session_state.results = None
     
-    # Force Streamlit to drop file references by updating widget identity
     st.session_state.uploader_key += 1
     st.rerun()
 
 
-# --- Dynamic Key File Uploader ---
+# --- Dynamic Key File Uploader with Primary (Green) Button ---
 if not st.session_state.processed:
     uploaded_files = st.file_uploader(
         "Upload one or more PDFs",
@@ -73,7 +92,7 @@ def normalize(text):
     text = text.replace(",", " ")
     text = text.replace("/", " ")
     text = text.replace(".", " ")
-    text = re.sub(r"\s+", " ", text)
+    text = SPACES_RE.sub(" ", text)
     return text.strip()
 
 
@@ -169,7 +188,7 @@ def parse_product_table(text):
             if not size:
                 if "FREE SIZE" in product.upper():
                     size = "FREE SIZE"
-                    m = re.search(r"FREE SIZE\s+(\d+)", product, re.I)
+                    m = FREE_SIZE_RE.search(product)
                     if m:
                         qty = int(m.group(1))
 
@@ -198,22 +217,22 @@ def parse_product_table(text):
 
 def extract_customer(text):
     name = "Unknown"
-    m = re.search(r"Customer Address\s*(.*?)\n", text, re.S | re.I)
+    m = CUSTOMER_RE.search(text)
     if m:
         name = m.group(1).strip()
 
     bill = ""
-    m = re.search(r"BILL TO\s*/\s*SHIP TO(.*?)(?:Sold by)", text, re.S | re.I)
+    m = BILL_RE.search(text)
     if m:
         bill = m.group(1)
 
     pin = ""
-    p = re.search(r"\b(\d{6})\b", bill)
+    p = PIN_RE.search(bill)
     if p:
         pin = p.group(1)
 
     phone = ""
-    ph = re.search(r"\b([6-9]\d{9})\b", text)
+    ph = PHONE_RE.search(text)
     if ph:
         phone = ph.group(1)
 
@@ -231,50 +250,46 @@ def extract_customer(text):
 def detect_exchange(text):
     work_text = text
 
-    customer_block = re.search(r"Customer Address[\s\S]*?If undelivered", work_text, re.I)
+    customer_block = CUSTOMER_BLOCK_RE.search(work_text)
     if customer_block:
         work_text = work_text.replace(customer_block.group(0), "")
 
-    bill_block = re.search(r"BILL TO\s*/\s*SHIP TO[\s\S]*", work_text, re.I)
+    bill_block = BILL_BLOCK_RE.search(work_text)
     if bill_block:
         work_text = work_text[:bill_block.start()]
 
-    work_text = re.sub(r"\s+", " ", work_text).lower()
+    work_text = SPACES_RE.sub(" ", work_text).lower()
 
-    exchange_patterns = [
-        r"\bexchange order\b",
-        r"\bexchange shipment\b",
-        r"\breplacement order\b",
-        r"\breplacement shipment\b",
-        r"\breplacement\b",
-        r"\bexchange\b",
-    ]
-
-    for pattern in exchange_patterns:
-        if re.search(pattern, work_text):
+    for pattern in EXCHANGE_PATTERNS:
+        if pattern.search(work_text):
             return True
 
     return False
 
 
 def parse_pdf(pdf_bytes):
-    reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+    # Pass B & A: Use PyMuPDF (fitz) directly for ultra-fast single-pass reading and extraction
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     pages = []
     progress = st.progress(0)
-    total = len(reader.pages)
+    total = len(doc)
 
-    for idx, page in enumerate(reader.pages):
-        progress.progress((idx + 1) / total)
-        text = page.extract_text() or ""
+    for idx in range(total):
+        # Pass E: Update UI every 25 pages instead of every single page
+        if idx % 25 == 0 or idx == total - 1:
+            progress.progress((idx + 1) / total)
+            
+        page = doc.load_page(idx)
+        text = page.get_text() or ""
         product = parse_product_table(text)
         customer = extract_customer(text)
         is_exchange = detect_exchange(text)
 
+        # Pass C: Removed heavy "reader_page" reference object entirely
         pages.append(
             {
                 "idx": idx,
                 "page": idx + 1,
-                "reader_page": page,
                 "text": text,
                 "name": customer["name"],
                 "identity": customer["identity"],
@@ -292,7 +307,8 @@ def parse_pdf(pdf_bytes):
             }
         )
     progress.empty()
-    return reader, pages
+    doc.close()
+    return pages
 
 
 def same_customer(identity1, identity2):
@@ -318,16 +334,25 @@ def same_customer(identity1, identity2):
 
 
 def split_orders(all_pages):
-    groups = []
+    # Pass G: Fast hash-map pre-grouping based on exact Name + PIN combinations
+    bucket_groups = defaultdict(list)
     for page in all_pages:
-        found = False
-        for group in groups:
-            if same_customer(page["identity"], group[0]["identity"]):
-                group.append(page)
-                found = True
-                break
-        if not found:
-            groups.append([page])
+        # Construct hashable compound key
+        key = (page["identity"][0], page["identity"][2])
+        bucket_groups[key].append(page)
+
+    groups = []
+    # Only run fuzzy address cross-matching within targeted structural collisions
+    for identity_key, matched_pages in bucket_groups.items():
+        for page in matched_pages:
+            found = False
+            for group in groups:
+                if same_customer(page["identity"], group[0]["identity"]):
+                    group.append(page)
+                    found = True
+                    break
+            if not found:
+                groups.append([page])
 
     normal_orders = []
     exchange_orders = []
@@ -461,9 +486,13 @@ def generate_pdf(reader, final_pages):
     writer = pypdf.PdfWriter()
     progress = st.progress(0)
     total = len(final_pages)
+    
     for i, page in enumerate(final_pages):
+        # Pass F: Throttle progress rendering updates to every 50 loops to clear DOM overhead
+        if i % 50 == 0 or i == total - 1:
+            progress.progress((i + 1) / total)
         writer.add_page(reader.pages[page["idx"]])
-        progress.progress((i + 1) / total)
+        
     progress.empty()
     buffer = io.BytesIO()
     writer.write(buffer)
@@ -614,8 +643,8 @@ if uploaded_files and process_clicked:
         buffer.seek(0)
         file_bytes = buffer.getvalue()
 
-    with st.spinner("Reading combined PDF..."):
-        reader, all_pages = parse_pdf(file_bytes)
+    with st.spinner("Reading combined PDF via PyMuPDF..."):
+        all_pages = parse_pdf(file_bytes)
 
     (
         main_pages,
@@ -626,9 +655,11 @@ if uploaded_files and process_clicked:
         duplicate_groups,
     ) = build_final_order(all_pages)
 
-    with st.spinner("Generating PDFs..."):
-        main_pdf = generate_pdf(reader, main_pages)
-        duplicate_pdf = generate_pdf(reader, duplicate_pages)
+    with st.spinner("Generating Final Output PDFs..."):
+        # Instantiated once for underlying page index copy writes
+        underlying_reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+        main_pdf = generate_pdf(underlying_reader, main_pages)
+        duplicate_pdf = generate_pdf(underlying_reader, duplicate_pages)
         cropped_pdf = generate_cropped_pdf(file_bytes, main_pages)
 
     st.session_state.results = {
