@@ -11,7 +11,7 @@ st.set_page_config(
     layout="centered",
 )
 
-st.title("📦 Raincoat Order Sorting Engine")
+st.title("📦 Raincoat Order Sorting Engine V2")
 
 uploaded_files = st.file_uploader(
     "Upload one or more PDFs",
@@ -440,63 +440,54 @@ def generate_cropped_pdf(original_pdf_bytes, main_pages):
     source = fitz.open(stream=original_pdf_bytes, filetype="pdf")
     output = fitz.open()
 
-    EXCHANGE_CROP = 235
+    MM_TO_PT = 2.83465
+    TOP_MARGIN = 3 * MM_TO_PT
+    EXCHANGE_TOP = 240
 
     for page_info in main_pages:
         page = source.load_page(page_info["idx"])
-        rect = page.rect
+
+        new_doc = fitz.open()
+        new_doc.insert_pdf(
+            source,
+            from_page=page.number,
+            to_page=page.number,
+        )
+
+        new_page = new_doc[0]
+        rect = new_page.rect
 
         if page_info["is_exchange"]:
-            crop_y = EXCHANGE_CROP
+            crop_y = EXCHANGE_TOP
         else:
-            areas = page.search_for("Product Details")
+            areas = new_page.search_for("Product Details")
 
             if not areas:
-                areas = page.search_for("PRODUCT DETAILS")
+                areas = new_page.search_for("PRODUCT DETAILS")
 
             if not areas:
-                areas = page.search_for("Product details")
+                areas = new_page.search_for("Product details")
+
+            if not areas:
+                areas = new_page.search_for("SKU")
 
             if areas:
-                product_box = areas[0]
-                MM_TO_PT = 2.83465
-                TOP_MARGIN = 4 * MM_TO_PT
-                crop_y = max(0, product_box.y0 - TOP_MARGIN)
+                crop_y = max(0, areas[0].y0 - TOP_MARGIN)
             else:
-                areas = page.search_for("SKU")
-                if areas:
-                    sku_box = areas[0]
-                    MM_TO_PT = 2.83465
-                    TOP_MARGIN = 4 * MM_TO_PT
-                    crop_y = max(0, sku_box.y0 - TOP_MARGIN)
-                else:
-                    crop_y = 0
+                crop_y = 0
 
-        clip = fitz.Rect(
-            0,
+        new_rect = fitz.Rect(
+            rect.x0,
             crop_y,
-            rect.width,
-            rect.height,
+            rect.x1,
+            rect.y1,
         )
 
-        new_height = rect.height - crop_y
+        new_page.set_cropbox(new_rect)
+        new_page.set_mediabox(new_rect)
 
-        new_page = output.new_page(
-            width=rect.width,
-            height=new_height,
-        )
-
-        new_page.show_pdf_page(
-            fitz.Rect(
-                0,
-                0,
-                rect.width,
-                new_height,
-            ),
-            source,
-            page.number,
-            clip=clip,
-        )
+        output.insert_pdf(new_doc)
+        new_doc.close()
 
     pdf_bytes = output.tobytes()
     output.close()
