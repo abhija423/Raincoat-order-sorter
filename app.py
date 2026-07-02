@@ -13,26 +13,37 @@ st.set_page_config(
 
 st.title("📦 Raincoat Order Sorting Engine")
 
+# --- Dynamic Key & State Initialization ---
+if "uploader_key" not in st.session_state:
+    st.session_state.uploader_key = 0
+
 if "processed" not in st.session_state:
     st.session_state.processed = False
 
 if "results" not in st.session_state:
     st.session_state.results = None
 
+
+# --- Updated Reset Engine Button ---
 if st.button("🔄 Reset Engine", use_container_width=True):
     st.cache_data.clear()
     st.cache_resource.clear()
-    for k in list(st.session_state.keys()):
-        del st.session_state[k]
+    
+    st.session_state.processed = False
+    st.session_state.results = None
+    
+    # Force Streamlit to drop file references by updating widget identity
+    st.session_state.uploader_key += 1
     st.rerun()
 
-# --- Replaced File Uploader with Custom Process Button Logic ---
+
+# --- Dynamic Key File Uploader ---
 if not st.session_state.processed:
     uploaded_files = st.file_uploader(
         "Upload one or more PDFs",
         type=["pdf"],
         accept_multiple_files=True,
-        key="pdf_uploader",
+        key=f"pdf_uploader_{st.session_state.uploader_key}",
     )
     process_clicked = st.button(
         "🚀 Process PDFs",
@@ -589,7 +600,7 @@ def show_parser_warnings(all_pages):
         st.dataframe(warnings, hide_index=True, use_container_width=True)
 
 
-# --- Replaced condition block to wait for explicit process click button ---
+# Processing block waiting for files + custom action button click
 if uploaded_files and process_clicked:
     with st.spinner("Merging uploaded files..."):
         combined_writer = pypdf.PdfWriter()
@@ -637,6 +648,7 @@ if uploaded_files and process_clicked:
     st.rerun()
 
 
+# Processing Finished UI State
 if st.session_state.processed:
     (
         main_pages,
