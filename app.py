@@ -11,7 +11,7 @@ st.set_page_config(
     layout="centered",
 )
 
-st.title("📦 Raincoat Order Sorting Engine V2")
+st.title("📦 Raincoat Order Sorting Engine")
 
 uploaded_files = st.file_uploader(
     "Upload one or more PDFs",
@@ -441,58 +441,59 @@ def generate_cropped_pdf(original_pdf_bytes, main_pages):
     output = fitz.open()
 
     MM_TO_PT = 2.83465
-    TOP_MARGIN = 3 * MM_TO_PT
-    EXCHANGE_TOP = 240
+    BOTTOM_MARGIN = 3 * MM_TO_PT
 
     for page_info in main_pages:
-        page = source.load_page(page_info["idx"])
-
-        new_doc = fitz.open()
-        new_doc.insert_pdf(
+        temp = fitz.open()
+        temp.insert_pdf(
             source,
-            from_page=page.number,
-            to_page=page.number,
+            from_page=page_info["idx"],
+            to_page=page_info["idx"],
         )
 
-        new_page = new_doc[0]
-        rect = new_page.rect
+        page = temp[0]
+        rect = page.rect
 
         if page_info["is_exchange"]:
-            crop_y = EXCHANGE_TOP
-        else:
-            areas = new_page.search_for("Product Details")
+            output.insert_pdf(temp)
+            temp.close()
+            continue
 
-            if not areas:
-                areas = new_page.search_for("PRODUCT DETAILS")
+        areas = page.search_for("BILL TO / SHIP TO")
 
-            if not areas:
-                areas = new_page.search_for("Product details")
+        if not areas:
+            areas = page.search_for("Bill To / Ship To")
 
-            if not areas:
-                areas = new_page.search_for("SKU")
+        if not areas:
+            areas = page.search_for("BILL TO")
 
-            if areas:
-                crop_y = max(0, areas[0].y0 - TOP_MARGIN)
-            else:
-                crop_y = 0
+        if not areas:
+            areas = page.search_for("SHIP TO")
 
-        new_rect = fitz.Rect(
-            rect.x0,
-            crop_y,
-            rect.x1,
-            rect.y1,
-        )
+        if areas:
+            bill = areas[0]
+            bottom = max(
+                rect.y0,
+                bill.y0 - BOTTOM_MARGIN,
+            )
 
-        new_page.set_cropbox(new_rect)
-        new_page.set_mediabox(new_rect)
+            new_rect = fitz.Rect(
+                rect.x0,
+                rect.y0,
+                rect.x1,
+                bottom,
+            )
 
-        output.insert_pdf(new_doc)
-        new_doc.close()
+            page.set_cropbox(new_rect)
+            page.set_mediabox(new_rect)
 
-    pdf_bytes = output.tobytes()
+        output.insert_pdf(temp)
+        temp.close()
+
+    pdf = output.tobytes()
     output.close()
     source.close()
-    return io.BytesIO(pdf_bytes)
+    return io.BytesIO(pdf)
 
 
 def show_exchange_summary(exchange_orders):
