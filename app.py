@@ -490,7 +490,19 @@ def generate_pdf(reader, final_pages):
     for i, page in enumerate(final_pages):
         # Pass F: Throttle progress rendering updates to every 50 loops to clear DOM overhead
         if i % 50 == 0 or i == total - 1:
-            progress.progress((i + 1) / total)
+            import time
+
+start = time.perf_counter()
+
+if i % 20 == 0 or i == total - 1:
+    percent = (i + 1) / total
+
+    progress.progress(percent)
+
+    status.markdown(
+        f"### 📄 Generating Main PDF\n"
+        f"**Processed:** {i+1:,} / {total:,} pages"
+    )
         writer.add_page(reader.pages[page["idx"]])
         
     progress.empty()
