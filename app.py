@@ -54,14 +54,14 @@ def reset_application_state():
     st.session_state.bulk_orders = []
     st.session_state.duplicate_groups = []
     st.session_state.last_uploaded_fingerprint = None
-    # This removes the uploaded files from the file uploader widget directly
+    # Clears the uploaded files list out of the widget
     if "pdf_uploader_file_input" in st.session_state:
         del st.session_state["pdf_uploader_file_input"]
+    st.session_state.trigger_reset = False
 
 
 # Check if reset was requested before rendering the file uploader
 if st.session_state.get("trigger_reset", False):
-    st.session_state.trigger_reset = False
     reset_application_state()
     st.rerun()
 
@@ -630,28 +630,30 @@ def show_parser_warnings(all_pages):
 
 # --- APPLICATION FLOW ENGINE LAYER ---
 if uploaded_files:
-    # Handle explicit buttons with flexible layout depending on execution state
+    # Handle explicit buttons with layout adjustments depending on execution state
     if st.session_state.processed:
-        btn_col1, btn_col2, btn_col3 = st.columns([2, 2, 1])
-        with btn_col1:
-            process_triggered = st.button("🚀 Process PDF", use_container_width=True, type="secondary")
-        with btn_col2:
-            reprocess_triggered = st.button("🔄 Reprocess", use_container_width=True, type="primary")
-        with btn_col3:
-            if st.button("🔄 Clear All", use_container_width=True):
-                st.session_state.trigger_reset = True
-                st.rerun()
-    else:
         btn_col1, btn_col2 = st.columns([3, 1])
+
         with btn_col1:
-            process_triggered = st.button("🚀 Process PDF", use_container_width=True, type="primary")
-            reprocess_triggered = False
+            process_triggered = False
+
         with btn_col2:
-            if st.button("🔄 Clear All", use_container_width=True):
+            if st.button("🧹 Clear All", use_container_width=True):
                 st.session_state.trigger_reset = True
                 st.rerun()
 
-    # The processing context engages exclusively upon crisp button triggers
+        reprocess_triggered = False
+    else:
+        btn_col1, btn_col2 = st.columns([3, 1])
+        with btn_col1:
+            process_triggered = st.button("🚀 Process", use_container_width=True, type="primary")
+            reprocess_triggered = False
+        with btn_col2:
+            if st.button("🧹 Clear All", use_container_width=True):
+                st.session_state.trigger_reset = True
+                st.rerun()
+
+    # Processing context engages exclusively upon crisp button triggers
     if (process_triggered or reprocess_triggered) and not st.session_state.processing_triggered:
         st.session_state.processing_triggered = True
         
@@ -695,9 +697,9 @@ if uploaded_files:
         st.session_state.main_pdf_data = main_pdf_bytes
         st.session_state.duplicate_pdf_data = duplicate_pdf_bytes
         st.session_state.cropped_pdf_data = cropped_pdf_bytes
+        
         st.session_state.processed = True
         st.session_state.processing_triggered = False
-        st.rerun()
 
     # Renders the full analysis dashboard once session memory contains parsed data
     if st.session_state.processed:
