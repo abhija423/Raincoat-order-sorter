@@ -72,6 +72,16 @@ uploaded_files = st.file_uploader(
     key="pdf_uploader_file_input"
 )
 
+# -----------------------------
+# Always Visible Clear Button
+# -----------------------------
+clear_col1, clear_col2 = st.columns([5, 1])
+
+with clear_col2:
+    if st.button("🧹 Clear All", use_container_width=True):
+        st.session_state.trigger_reset = True
+        st.rerun()
+
 # Compute fingerprint to track changes in uploaded files
 current_fingerprint = None
 if uploaded_files:
@@ -632,26 +642,15 @@ def show_parser_warnings(all_pages):
 if uploaded_files:
     # Handle explicit buttons with layout adjustments depending on execution state
     if st.session_state.processed:
-        btn_col1, btn_col2 = st.columns([3, 1])
-
-        with btn_col1:
-            process_triggered = False
-
-        with btn_col2:
-            if st.button("🧹 Clear All", use_container_width=True):
-                st.session_state.trigger_reset = True
-                st.rerun()
-
+        process_triggered = False
         reprocess_triggered = False
     else:
-        btn_col1, btn_col2 = st.columns([3, 1])
-        with btn_col1:
-            process_triggered = st.button("🚀 Process", use_container_width=True, type="primary")
-            reprocess_triggered = False
-        with btn_col2:
-            if st.button("🧹 Clear All", use_container_width=True):
-                st.session_state.trigger_reset = True
-                st.rerun()
+        process_triggered = st.button(
+            "🚀 Process PDF",
+            use_container_width=True,
+            type="primary"
+        )
+        reprocess_triggered = False
 
     # Processing context engages exclusively upon crisp button triggers
     if (process_triggered or reprocess_triggered) and not st.session_state.processing_triggered:
