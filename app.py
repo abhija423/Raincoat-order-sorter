@@ -38,6 +38,8 @@ if "duplicate_groups" not in st.session_state:
     st.session_state.duplicate_groups = []
 if "last_uploaded_fingerprint" not in st.session_state:
     st.session_state.last_uploaded_fingerprint = None
+if "uploader_key" not in st.session_state:
+    st.session_state.uploader_key = 0
 
 
 # Reset utility to completely clear state data and file uploader
@@ -54,9 +56,9 @@ def reset_application_state():
     st.session_state.bulk_orders = []
     st.session_state.duplicate_groups = []
     st.session_state.last_uploaded_fingerprint = None
-    # Clears the uploaded files list out of the widget
-    if "pdf_uploader_file_input" in st.session_state:
-        del st.session_state["pdf_uploader_file_input"]
+
+    # Force Streamlit to recreate the uploader (removes all uploaded PDFs)
+    st.session_state.uploader_key += 1
     st.session_state.trigger_reset = False
 
 
@@ -69,7 +71,7 @@ uploaded_files = st.file_uploader(
     "Upload one or more PDFs",
     type=["pdf"],
     accept_multiple_files=True,
-    key="pdf_uploader_file_input"
+    key=f"pdf_uploader_file_input_{st.session_state.uploader_key}"
 )
 
 # -----------------------------
