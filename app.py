@@ -16,6 +16,8 @@ st.title("📦 Raincoat Order Sorting Engine")
 # --- SESSION STATE INITIALIZATION ---
 if "processed" not in st.session_state:
     st.session_state.processed = False
+if "processing_triggered" not in st.session_state:
+    st.session_state.processing_triggered = False
 if "main_pdf_data" not in st.session_state:
     st.session_state.main_pdf_data = None
 if "duplicate_pdf_data" not in st.session_state:
@@ -38,9 +40,10 @@ if "last_uploaded_fingerprint" not in st.session_state:
     st.session_state.last_uploaded_fingerprint = None
 
 
-# Reset utility to completely clear state data
+# Reset utility to completely clear state data and file uploader
 def reset_application_state():
     st.session_state.processed = False
+    st.session_state.processing_triggered = False
     st.session_state.main_pdf_data = None
     st.session_state.duplicate_pdf_data = None
     st.session_state.cropped_pdf_data = None
@@ -51,7 +54,16 @@ def reset_application_state():
     st.session_state.bulk_orders = []
     st.session_state.duplicate_groups = []
     st.session_state.last_uploaded_fingerprint = None
+    # This removes the uploaded files from the file uploader widget directly
+    if "pdf_uploader_file_input" in st.session_state:
+        del st.session_state["pdf_uploader_file_input"]
 
+
+# Check if reset was requested before rendering the file uploader
+if st.session_state.get("trigger_reset", False):
+    st.session_state.trigger_reset = False
+    reset_application_state()
+    st.rerun()
 
 uploaded_files = st.file_uploader(
     "Upload one or more PDFs",
@@ -618,20 +630,31 @@ def show_parser_warnings(all_pages):
 
 # --- APPLICATION FLOW ENGINE LAYER ---
 if uploaded_files:
-    # Render operational buttons layout side-by-side
-    btn_col1, btn_col2 = st.columns([3, 1])
-    
-    with btn_col1:
-        # The engine triggers explicitly ONLY on this click event
-        process_triggered = st.button("🚀 Process PDF", use_container_width=True, type="primary")
-        
-    with btn_col2:
-        if st.button("🗑️ Reset", use_container_width=True):
-            reset_application_state()
-            st.rerun()
+    # Handle explicit buttons with flexible layout depending on execution state
+    if st.session_state.processed:
+        btn_col1, btn_col2, btn_col3 = st.columns([2, 2, 1])
+        with btn_col1:
+            process_triggered = st.button("🚀 Process PDF", use_container_width=True, type="secondary")
+        with btn_col2:
+            reprocess_triggered = st.button("🔄 Reprocess", use_container_width=True, type="primary")
+        with btn_col3:
+            if st.button("🔄 Clear All", use_container_width=True):
+                st.session_state.trigger_reset = True
+                st.rerun()
+    else:
+        btn_col1, btn_col2 = st.columns([3, 1])
+        with btn_col1:
+            process_triggered = st.button("🚀 Process PDF", use_container_width=True, type="primary")
+            reprocess_triggered = False
+        with btn_col2:
+            if st.button("🔄 Clear All", use_container_width=True):
+                st.session_state.trigger_reset = True
+                st.rerun()
 
-    # Heavy execution block now strictly waits for explicit execution confirmation
-    if process_triggered and not st.session_state.processed:
+    # The processing context engages exclusively upon crisp button triggers
+    if (process_triggered or reprocess_triggered) and not st.session_state.processing_triggered:
+        st.session_state.processing_triggered = True
+        
         with st.spinner("Merging uploaded files into unified buffer..."):
             combined_writer = pypdf.PdfWriter()
             for uploaded_file in uploaded_files:
@@ -673,6 +696,7 @@ if uploaded_files:
         st.session_state.duplicate_pdf_data = duplicate_pdf_bytes
         st.session_state.cropped_pdf_data = cropped_pdf_bytes
         st.session_state.processed = True
+        st.session_state.processing_triggered = False
         st.rerun()
 
     # Renders the full analysis dashboard once session memory contains parsed data
