@@ -89,9 +89,20 @@ current_fingerprint = None
 if uploaded_files:
     current_fingerprint = "+".join([f"{f.name}_{f.size}" for f in uploaded_files])
 
-# Reset state automatically if the file selection changes
+# Reset processing state only when the uploaded files change
 if current_fingerprint != st.session_state.last_uploaded_fingerprint:
-    reset_application_state()
+    st.session_state.processed = False
+    st.session_state.processing_triggered = False
+    st.session_state.main_pdf_data = None
+    st.session_state.duplicate_pdf_data = None
+    st.session_state.cropped_pdf_data = None
+    st.session_state.all_pages = []
+    st.session_state.main_pages = []
+    st.session_state.duplicate_pages = []
+    st.session_state.exchange_orders = []
+    st.session_state.bulk_orders = []
+    st.session_state.duplicate_groups = []
+
     st.session_state.last_uploaded_fingerprint = current_fingerprint
 
 SIZE_RANK = {
