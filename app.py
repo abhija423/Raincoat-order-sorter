@@ -13,8 +13,6 @@ st.set_page_config(
 
 st.title("📦 Raincoat Order Sorting Engine")
 
-LARGE_FILE_THRESHOLD_MB = 50
-
 # --- SESSION STATE INITIALIZATION ---
 if "processed" not in st.session_state:
     st.session_state.processed = False
@@ -91,9 +89,20 @@ current_fingerprint = None
 if uploaded_files:
     current_fingerprint = "+".join([f"{f.name}_{f.size}" for f in uploaded_files])
 
-# Reset state automatically if the file selection changes
+# Reset processing state only when the uploaded files change
 if current_fingerprint != st.session_state.last_uploaded_fingerprint:
-    reset_application_state()
+    st.session_state.processed = False
+    st.session_state.processing_triggered = False
+    st.session_state.main_pdf_data = None
+    st.session_state.duplicate_pdf_data = None
+    st.session_state.cropped_pdf_data = None
+    st.session_state.all_pages = []
+    st.session_state.main_pages = []
+    st.session_state.duplicate_pages = []
+    st.session_state.exchange_orders = []
+    st.session_state.bulk_orders = []
+    st.session_state.duplicate_groups = []
+
     st.session_state.last_uploaded_fingerprint = current_fingerprint
 
 SIZE_RANK = {
@@ -671,15 +680,6 @@ if uploaded_files:
             combined_writer.write(buffer)
             buffer.seek(0)
             file_bytes = buffer.getvalue()
-            
-            file_size_mb = len(file_bytes) / (1024 * 1024)
-            is_large_file = file_size_mb > LARGE_FILE_THRESHOLD_MB
-
-            if is_large_file:
-                st.warning(
-                    f"Large PDF detected ({file_size_mb:.1f} MB).\n\n"
-                    "Cropped PDF generation has been skipped automatically to improve stability."
-                )
 
         with st.spinner("Extracting tokens & mapping logistics matrix..."):
             reader, all_pages = parse_pdf(file_bytes)
@@ -696,18 +696,7 @@ if uploaded_files:
         with st.spinner("Rendering output document structures..."):
             main_pdf_bytes = generate_pdf(reader, main_pages)
             duplicate_pdf_bytes = generate_pdf(reader, duplicate_pages)
-            
-            if is_large_file:
-                cropped_pdf_bytes = None
-            else:
-                try:
-                    cropped_pdf_bytes = generate_cropped_pdf(file_bytes, main_pages)
-                except Exception:
-                    cropped_pdf_bytes = None
-                    st.warning(
-                        "Cropped PDF could not be generated due to memory constraints. "
-                        "Main and Duplicate PDFs were generated successfully."
-                    )
+            cropped_pdf_bytes = generate_cropped_pdf(file_bytes, main_pages)
 
         # Store everything securely inside memory layer
         st.session_state.all_pages = all_pages
@@ -760,14 +749,13 @@ if uploaded_files:
                 use_container_width=True,
             )
         with col3:
-            if st.session_state.cropped_pdf_data is not None:
-                st.download_button(
-                    "✂️ Cropped PDF",
-                    data=st.session_state.cropped_pdf_data,
-                    file_name="Cropped_Main.pdf",
-                    mime="application/pdf",
-                    use_container_width=True,
-                )
+            st.download_button(
+                "✂️ Cropped PDF",
+                data=st.session_state.cropped_pdf_data,
+                file_name="Cropped_Main.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
         
         st.markdown("---")
         show_exchange_summary(st.session_state.exchange_orders)
