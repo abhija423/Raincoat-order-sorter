@@ -170,43 +170,18 @@ def get_color_rank(color):
     return 99
 
 
-# REPLACED: get_free_size_color() with expanded color matching criteria
 def get_free_size_color(sku):
-
     sku = sku.upper()
 
-    if any(x in sku for x in [
-        "BLUE",
-        "BLU",
-        "NAVY",
-        "NVY"
-    ]):
+    if any(x in sku for x in ["BLUE", "BLU", "NAVY", "NVY"]):
         return "BLUE"
-
-    elif any(x in sku for x in [
-        "BLACK",
-        "BLK"
-    ]):
+    elif any(x in sku for x in ["BLACK", "BLK"]):
         return "BLACK"
-
-    elif any(x in sku for x in [
-        "WHITE",
-        "WHT"
-    ]):
+    elif any(x in sku for x in ["WHITE", "WHT"]):
         return "WHITE"
-
-    elif any(x in sku for x in [
-        "MAROON",
-        "MRN"
-    ]):
+    elif any(x in sku for x in ["MAROON", "MRN"]):
         return "MAROON"
-
-    elif any(x in sku for x in [
-        "MULTI",
-        "MULTICOLOUR",
-        "MULTICOLOR",
-        "MIX"
-    ]):
+    elif any(x in sku for x in ["MULTI", "MULTICOLOUR", "MULTICOLOR", "MIX"]):
         return "MULTICOLOUR"
 
     return "UNKNOWN"
@@ -259,17 +234,51 @@ def parse_product_table(text):
                             order = tokens[-1]
                     break
 
+            # PART 1 - Replaced with Dynamic Free Size color token processing block
             if not size:
+
                 if "FREE SIZE" in product.upper():
+
                     size = "FREE SIZE"
+
                     m = re.search(r"FREE SIZE\s+(\d+)", product, re.I)
                     if m:
                         qty = int(m.group(1))
 
-                    if "NAVY" in product.upper():
-                        color = "Navy Blue"
-                    elif "BLACK" in product.upper():
-                        color = "Black"
+                    #
+                    # Detect colour dynamically
+                    #
+
+                    color = ""
+
+                    upper_tokens = [t.upper() for t in tokens]
+
+                    try:
+
+                        fs_index = upper_tokens.index("FREE")
+
+                        # FREE SIZE
+                        if upper_tokens[fs_index + 1] == "SIZE":
+
+                            start = fs_index + 3       # after FREE SIZE Qty
+
+                            colour_tokens = []
+
+                            for token in tokens[start:]:
+
+                                if token == tokens[-1]:
+                                    break
+
+                                colour_tokens.append(token)
+
+                            color = " ".join(colour_tokens).strip()
+
+                    except:
+                        color = ""
+
+                    if not color:
+                        color = "NA"
+
                     order = tokens[-1]
 
             return {
@@ -677,7 +686,7 @@ def show_exchange_summary(exchange_orders):
     st.success(f"Total Exchange Quantity : {total_qty}")
 
 
-# UPDATED: show_packing_summary() with unknown SKU collection and expanded matrix options
+# UPDATED: Completely dynamic tracking matrices for FREE SIZE fields
 def show_packing_summary(all_pages):
 
     normal_summary = defaultdict(int)
@@ -698,12 +707,17 @@ def show_packing_summary(all_pages):
         # FREE SIZE PRODUCTS
         if size == "FREE SIZE":
 
-            fs_color = get_free_size_color(sku)
+            # PART 2 - Dynamically track colors directly derived from label parsing routing
+            colour = page["color"].strip()
 
-            free_size_summary[fs_color] += qty
+            if colour.upper() == "NA":
 
-            if fs_color == "UNKNOWN":
+                free_size_summary["NA"] += qty
                 unknown_skus[sku] += qty
+
+            else:
+
+                free_size_summary[colour.title()] += qty
 
         else:
 
@@ -765,14 +779,11 @@ def show_packing_summary(all_pages):
 
     subtotal = 0
 
-    for colour in [
-        "BLUE",
-        "BLACK",
-        "MAROON",
-        "WHITE",
-        "MULTICOLOUR",
-        "UNKNOWN"
-    ]:
+    # PART 3 - Loop over unique sorted dynamic color tracking keys, isolating NA to the absolute bottom
+    for colour in sorted(free_size_summary.keys()):
+
+        if colour == "NA":
+            continue
 
         qty = free_size_summary[colour]
 
@@ -780,14 +791,30 @@ def show_packing_summary(all_pages):
 
         rows.append(
             {
-                "Colour": colour.title(),
+                "Colour": colour,
                 "Qty": qty
+            }
+        )
+
+    #
+    # NA row
+    #
+
+    if free_size_summary["NA"]:
+
+        subtotal += free_size_summary["NA"]
+
+        rows.append(
+            {
+                "Colour": "NA",
+                "Qty": free_size_summary["NA"]
             }
         )
 
     st.table(rows)
 
-    if unknown_skus:
+    # PART 4 - Unknown SKU structural breakdown triggered conditionally only when an explicit NA flag exists
+    if free_size_summary["NA"] > 0:
 
         st.markdown("#### Unknown SKU Breakdown")
 
@@ -822,10 +849,9 @@ def show_parser_warnings(all_pages):
         if not page["sku"]:
             issues.append("Unknown/Missing SKU")
         
-        # Matches the updated UNKNOWN flag
         if (
             page["size"] == "FREE SIZE"
-            and get_free_size_color(page["sku"]) == "UNKNOWN"
+            and page["color"] == "NA"
         ):
             issues.append("Unknown Free Size Colour in SKU")
             
