@@ -170,6 +170,33 @@ def get_color_rank(color):
     return 99
 
 
+# PART 1 - Helper function to detect Free Size colour from SKU
+def get_free_size_color(sku):
+    """
+    Detect Free Size colour from SKU.
+    """
+    sku = sku.upper().replace("-", " ").replace("_", " ")
+
+    if any(x in sku for x in ["NAVY", "BLUE"]):
+        return "BLUE"
+
+    if any(x in sku for x in ["BLACK", "BLK"]):
+        return "BLACK"
+
+    if any(x in sku for x in ["WHITE", "WHT"]):
+        return "WHITE"
+
+    if any(x in sku for x in [
+        "MULTI",
+        "MULTICOLOR",
+        "MULTICOLOUR",
+        "MIX"
+    ]):
+        return "MULTICOLOUR"
+
+    return "NA"
+
+
 def parse_product_table(text):
     lines = []
     for line in text.splitlines():
@@ -449,31 +476,79 @@ def build_final_order(all_pages):
     )
 
 
+# PART 4, 5, 6, 7 & 8 - Show Debug Table modifications
 def show_debug_table(main_pages, duplicate_pages, exchange_orders, bulk_orders):
     st.subheader("📊 Sorting Summary")
-    c1, c2, c3, c4 = st.columns(4)
+    
+    # PART 4 - Setup 5 columns
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Main PDF", len(main_pages))
     c2.metric("Duplicate PDF", len(duplicate_pages))
     c3.metric("Exchange", len(exchange_orders))
     c4.metric("Bulk Qty", len(bulk_orders))
+    
+    normal_orders = len(main_pages) - len(exchange_orders) - len(bulk_orders)
+    c5.metric("New Orders", normal_orders)
+
+    # PART 5 - Page Range Summary
+    normal_start = 1
+    normal_end = normal_orders
+
+    exchange_start = normal_end + 1
+    exchange_end = exchange_start + len(exchange_orders) - 1
+
+    bulk_start = exchange_end + 1
+    bulk_end = bulk_start + len(bulk_orders) - 1
+
+    page_summary = [
+        {
+            "Section": "New Orders",
+            "Pages": f"{normal_start}-{normal_end}"
+        }
+    ]
+
+    if exchange_orders:
+        page_summary.append(
+            {
+                "Section": "Exchange",
+                "Pages": f"{exchange_start}-{exchange_end}"
+            }
+        )
+
+    if bulk_orders:
+        page_summary.append(
+            {
+                "Section": "Bulk Qty",
+                "Pages": f"{bulk_start}-{bulk_end}"
+            }
+        )
+
+    st.markdown("### 📑 Page Ranges")
+    st.table(page_summary)
 
     rows = []
     for new_page, page in enumerate(main_pages, start=1):
+        # PART 7 - Dynamic section naming & schema addition
         if page["is_exchange"]:
             bucket = "Exchange"
+            page_type = "Exchange"
         elif page["qty"] > 1:
             bucket = "Bulk Qty"
+            page_type = "Bulk"
         else:
             bucket = "Normal"
+            page_type = "New Order"
 
         rows.append(
             {
                 "Output": new_page,
                 "Original": page["page"],
                 "Customer": page["name"],
+                "SKU": page["sku"],
                 "Color": page["color"],
                 "Size": page["size"],
                 "Qty": page["qty"],
+                "Section": page_type,
                 "Bucket": bucket,
             }
         )
@@ -485,14 +560,18 @@ def show_debug_table(main_pages, duplicate_pages, exchange_orders, bulk_orders):
                 "Output": offset + i,
                 "Original": page["page"],
                 "Customer": page["name"],
+                "SKU": page["sku"],
                 "Color": page["color"],
                 "Size": page["size"],
                 "Qty": page["qty"],
+                # PART 8 - Update duplicate rows scheme
+                "Section": "Duplicate",
                 "Bucket": "Duplicate",
             }
         )
 
-    with st.expander("Page Movement"):
+    # PART 6 - Renamed expander box
+    with st.expander("📄 Page Movement & Ranges"):
         st.dataframe(rows, hide_index=True, use_container_width=True)
 
 
@@ -589,42 +668,116 @@ def show_exchange_summary(exchange_orders):
     st.success(f"Total Exchange Quantity : {total_qty}")
 
 
+# PART 2 - Completely Replaced show_packing_summary()
 def show_packing_summary(all_pages):
-    summary = defaultdict(int)
-    total_qty = 0
+
+    normal_summary = defaultdict(int)
+    free_size_summary = defaultdict(int)
+
+    grand_total = 0
+
     for page in all_pages:
-        color = page["color"].upper() if page["color"] else "UNKNOWN COLOR"
-        size = page["size"].upper() if page["size"] else "UNKNOWN SIZE"
+
         qty = page["qty"]
-        key = (color, size)
-        summary[key] += qty
-        total_qty += qty
+        size = page["size"].upper().strip()
+        color = page["color"].upper().strip() if page["color"] else ""
+        sku = page["sku"]
+
+        grand_total += qty
+
+        # FREE SIZE PRODUCTS
+        if size == "FREE SIZE":
+
+            fs_color = get_free_size_color(sku)
+            free_size_summary[fs_color] += qty
+
+        else:
+
+            normal_summary[(color, size)] += qty
 
     st.markdown("---")
     st.subheader("📦 Packing Summary Matrix (Main PDF)")
-    colors = ["NAVY BLUE", "BLACK", "FREE SIZE"]
-    sizes = ["S", "M", "L", "XL", "XXL", "XXXL", "FREE SIZE"]
+
+    colors = [
+        "NAVY BLUE",
+        "BLACK"
+    ]
+
+    sizes = [
+        "S",
+        "M",
+        "L",
+        "XL",
+        "XXL",
+        "XXXL"
+    ]
+
+    # --------------------
+    # NAVY & BLACK
+    # --------------------
 
     for color in colors:
+
         st.markdown(f"### {color}")
+
         rows = []
+
         subtotal = 0
+
         for size in sizes:
-            qty = summary[(color, size)]
+
+            qty = normal_summary[(color, size)]
+
             subtotal += qty
-            rows.append({"Size": size, "Qty": qty})
-        
-        unknown_qty = sum(v for k, v in summary.items() if k[0] == color and k[1] not in sizes)
-        if unknown_qty > 0:
-            rows.append({"Size": "OTHER/UNPARSED", "Qty": unknown_qty})
-            subtotal += unknown_qty
+
+            rows.append(
+                {
+                    "Size": size,
+                    "Qty": qty
+                }
+            )
 
         st.table(rows)
+
         st.success(f"Total {color} : {subtotal}")
 
-    st.info(f"Grand Total Pieces : {total_qty}")
+    # --------------------
+    # FREE SIZE
+    # --------------------
+
+    st.markdown("### FREE SIZE")
+
+    rows = []
+
+    subtotal = 0
+
+    for colour in [
+        "BLUE",
+        "BLACK",
+        "WHITE",
+        "MULTICOLOUR",
+        "NA"
+    ]:
+
+        qty = free_size_summary[colour]
+
+        subtotal += qty
+
+        rows.append(
+            {
+                "Colour": colour.title(),
+                "Qty": qty
+            }
+        )
+
+    st.table(rows)
+
+    st.success(f"Total FREE SIZE : {subtotal}")
+
+    st.info(f"Grand Total Pieces : {grand_total}")
 
 
+# PART 3 - Improved Parser Warning
 def show_parser_warnings(all_pages):
     warnings = []
     for page in all_pages:
@@ -635,6 +788,14 @@ def show_parser_warnings(all_pages):
             issues.append("Missing/Unparsed Color")
         if not page["sku"]:
             issues.append("Unknown/Missing SKU")
+        
+        # New conditional check added for Unknown Free Size colors
+        if (
+            page["size"] == "FREE SIZE"
+            and get_free_size_color(page["sku"]) == "NA"
+        ):
+            issues.append("Unknown Free Size Colour in SKU")
+            
         if page["qty"] <= 0:
             issues.append(f"Invalid Quantity ({page['qty']})")
         
