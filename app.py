@@ -966,8 +966,6 @@ if uploaded_files:
         show_packing_summary(st.session_state.main_pages)
         show_parser_warnings(st.session_state.all_pages)
 
-        st.markdown("---")
-        st.markdown("---")
         st.success("Processing Completed")
 else:
     st.warning("Awaiting file upload context. Please drop label manifest files above.")
