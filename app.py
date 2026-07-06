@@ -170,31 +170,46 @@ def get_color_rank(color):
     return 99
 
 
-# PART 1 - Helper function to detect Free Size colour from SKU
+# REPLACED: get_free_size_color() with expanded color matching criteria
 def get_free_size_color(sku):
-    """
-    Detect Free Size colour from SKU.
-    """
-    sku = sku.upper().replace("-", " ").replace("_", " ")
 
-    if any(x in sku for x in ["NAVY", "BLUE"]):
-        return "BLUE"
-
-    if any(x in sku for x in ["BLACK", "BLK"]):
-        return "BLACK"
-
-    if any(x in sku for x in ["WHITE", "WHT"]):
-        return "WHITE"
+    sku = sku.upper()
 
     if any(x in sku for x in [
+        "BLUE",
+        "BLU",
+        "NAVY",
+        "NVY"
+    ]):
+        return "BLUE"
+
+    elif any(x in sku for x in [
+        "BLACK",
+        "BLK"
+    ]):
+        return "BLACK"
+
+    elif any(x in sku for x in [
+        "WHITE",
+        "WHT"
+    ]):
+        return "WHITE"
+
+    elif any(x in sku for x in [
+        "MAROON",
+        "MRN"
+    ]):
+        return "MAROON"
+
+    elif any(x in sku for x in [
         "MULTI",
-        "MULTICOLOR",
         "MULTICOLOUR",
+        "MULTICOLOR",
         "MIX"
     ]):
         return "MULTICOLOUR"
 
-    return "NA"
+    return "UNKNOWN"
 
 
 def parse_product_table(text):
@@ -476,11 +491,9 @@ def build_final_order(all_pages):
     )
 
 
-# PART 4, 5, 6, 7 & 8 - Show Debug Table modifications
 def show_debug_table(main_pages, duplicate_pages, exchange_orders, bulk_orders):
     st.subheader("📊 Sorting Summary")
     
-    # PART 4 - Setup 5 columns
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Main PDF", len(main_pages))
     c2.metric("Duplicate PDF", len(duplicate_pages))
@@ -490,7 +503,6 @@ def show_debug_table(main_pages, duplicate_pages, exchange_orders, bulk_orders):
     normal_orders = len(main_pages) - len(exchange_orders) - len(bulk_orders)
     c5.metric("New Orders", normal_orders)
 
-    # PART 5 - Page Range Summary
     normal_start = 1
     normal_end = normal_orders
 
@@ -528,7 +540,6 @@ def show_debug_table(main_pages, duplicate_pages, exchange_orders, bulk_orders):
 
     rows = []
     for new_page, page in enumerate(main_pages, start=1):
-        # PART 7 - Dynamic section naming & schema addition
         if page["is_exchange"]:
             bucket = "Exchange"
             page_type = "Exchange"
@@ -564,13 +575,11 @@ def show_debug_table(main_pages, duplicate_pages, exchange_orders, bulk_orders):
                 "Color": page["color"],
                 "Size": page["size"],
                 "Qty": page["qty"],
-                # PART 8 - Update duplicate rows scheme
                 "Section": "Duplicate",
                 "Bucket": "Duplicate",
             }
         )
 
-    # PART 6 - Renamed expander box
     with st.expander("📄 Page Movement & Ranges"):
         st.dataframe(rows, hide_index=True, use_container_width=True)
 
@@ -668,11 +677,12 @@ def show_exchange_summary(exchange_orders):
     st.success(f"Total Exchange Quantity : {total_qty}")
 
 
-# PART 2 - Completely Replaced show_packing_summary()
+# UPDATED: show_packing_summary() with unknown SKU collection and expanded matrix options
 def show_packing_summary(all_pages):
 
     normal_summary = defaultdict(int)
     free_size_summary = defaultdict(int)
+    unknown_skus = defaultdict(int)
 
     grand_total = 0
 
@@ -689,7 +699,11 @@ def show_packing_summary(all_pages):
         if size == "FREE SIZE":
 
             fs_color = get_free_size_color(sku)
+
             free_size_summary[fs_color] += qty
+
+            if fs_color == "UNKNOWN":
+                unknown_skus[sku] += qty
 
         else:
 
@@ -754,9 +768,10 @@ def show_packing_summary(all_pages):
     for colour in [
         "BLUE",
         "BLACK",
+        "MAROON",
         "WHITE",
         "MULTICOLOUR",
-        "NA"
+        "UNKNOWN"
     ]:
 
         qty = free_size_summary[colour]
@@ -772,12 +787,30 @@ def show_packing_summary(all_pages):
 
     st.table(rows)
 
+    if unknown_skus:
+
+        st.markdown("#### Unknown SKU Breakdown")
+
+        sku_rows = []
+
+        for sku, qty in sorted(
+            unknown_skus.items(),
+            key=lambda x: x[0]
+        ):
+            sku_rows.append(
+                {
+                    "SKU": sku,
+                    "Qty": qty
+                }
+            )
+
+        st.table(sku_rows)
+
     st.success(f"Total FREE SIZE : {subtotal}")
 
     st.info(f"Grand Total Pieces : {grand_total}")
 
 
-# PART 3 - Improved Parser Warning
 def show_parser_warnings(all_pages):
     warnings = []
     for page in all_pages:
@@ -789,10 +822,10 @@ def show_parser_warnings(all_pages):
         if not page["sku"]:
             issues.append("Unknown/Missing SKU")
         
-        # New conditional check added for Unknown Free Size colors
+        # Matches the updated UNKNOWN flag
         if (
             page["size"] == "FREE SIZE"
-            and get_free_size_color(page["sku"]) == "NA"
+            and get_free_size_color(page["sku"]) == "UNKNOWN"
         ):
             issues.append("Unknown Free Size Colour in SKU")
             
@@ -814,7 +847,6 @@ def show_parser_warnings(all_pages):
 
 # --- APPLICATION FLOW ENGINE LAYER ---
 if uploaded_files:
-    # Handle explicit buttons with layout adjustments depending on execution state
     if st.session_state.processed:
         process_triggered = False
         reprocess_triggered = False
@@ -826,7 +858,6 @@ if uploaded_files:
         )
         reprocess_triggered = False
 
-    # Processing context engages exclusively upon crisp button triggers
     if (process_triggered or reprocess_triggered) and not st.session_state.processing_triggered:
         st.session_state.processing_triggered = True
         
@@ -859,7 +890,6 @@ if uploaded_files:
             duplicate_pdf_bytes = generate_pdf(reader, duplicate_pages)
             cropped_pdf_bytes = generate_cropped_pdf(file_bytes, main_pages)
 
-        # Store everything securely inside memory layer
         st.session_state.all_pages = all_pages
         st.session_state.main_pages = main_pages
         st.session_state.duplicate_pages = duplicate_pages
@@ -874,7 +904,6 @@ if uploaded_files:
         st.session_state.processed = True
         st.session_state.processing_triggered = False
 
-    # Renders the full analysis dashboard once session memory contains parsed data
     if st.session_state.processed:
         st.success(
             f"Processed {len(st.session_state.all_pages)} Pages\n\n"
