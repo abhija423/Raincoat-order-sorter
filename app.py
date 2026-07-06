@@ -968,6 +968,6 @@ if uploaded_files:
 
         st.markdown("---")
         st.markdown("---")
-        st.success("Done ✅")
+        st.success("Processing Completed")
 else:
     st.warning("Awaiting file upload context. Please drop label manifest files above.")
