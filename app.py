@@ -593,18 +593,6 @@ def show_debug_table(main_pages, duplicate_pages, exchange_orders, bulk_orders):
         st.dataframe(rows, hide_index=True, use_container_width=True)
 
 
-def show_duplicate_groups(duplicate_groups):
-    if not duplicate_groups:
-        return
-    st.subheader("Duplicate Customers")
-    for group in duplicate_groups:
-        first = group[0]
-        pages = " , ".join(str(x["page"]) for x in group)
-        st.markdown(
-            f"**{first['name']}**\n\nPages : {pages}\n\nPIN : {first['pin']}\n\nOrders : {len(group)}"
-        )
-
-
 def generate_pdf(reader, final_pages):
     writer = pypdf.PdfWriter()
     progress = st.progress(0)
@@ -979,8 +967,6 @@ if uploaded_files:
         show_parser_warnings(st.session_state.all_pages)
 
         st.markdown("---")
-        if st.session_state.duplicate_pages:
-            show_duplicate_groups(st.session_state.duplicate_groups)
         st.markdown("---")
         st.success("Done ✅")
 else:
